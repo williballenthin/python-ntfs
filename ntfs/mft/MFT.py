@@ -26,16 +26,8 @@ import logging
 from datetime import datetime
 from collections import OrderedDict  # python 2.7 only
 
-from BinaryParser import Block
-from BinaryParser import Nestable
-from BinaryParser import memoize
-from BinaryParser import align
-from BinaryParser import ParseException
-from BinaryParser import OverrunBufferException
-from BinaryParser import read_byte
-from BinaryParser import read_word
-from BinaryParser import read_dword
-from Progress import NullProgress
+from .. import BinaryParser
+from .. import Progress
 
 
 class INDXException(Exception):
@@ -55,7 +47,7 @@ class INDXException(Exception):
         return "INDX Exception: %s" % (self._value)
 
 
-class FixupBlock(Block):
+class FixupBlock(BinaryParse.Block):
     def __init__(self, buf, offset, parent):
         super(FixupBlock, self).__init__(buf, offset)
 
@@ -88,7 +80,7 @@ class INDEX_ENTRY_FLAGS:
     INDEX_ENTRY_SPACE_FILLER = 0xFFFF
 
 
-class INDEX_ENTRY_HEADER(Block, Nestable):
+class INDEX_ENTRY_HEADER(BinaryParser.Block, BinaryParser.Nestable):
     def __init__(self, buf, offset, parent):
         super(INDEX_ENTRY_HEADER, self).__init__(buf, offset)
         self.declare_field("word", "length", 0x8)
@@ -133,7 +125,7 @@ class SECURE_INDEX_ENTRY_HEADER(INDEX_ENTRY_HEADER):
         self.declare_field("dword", "reserved")
 
 
-class INDEX_ENTRY(Block,  Nestable):
+class INDEX_ENTRY(BinaryParser.Block, BinaryParser.Nestable):
     """
     NOTE: example structure. See the more specific classes below.
       Probably do not instantiate.
@@ -150,7 +142,7 @@ class INDEX_ENTRY(Block,  Nestable):
 
     @staticmethod
     def structure_size(buf, offset, parent):
-        return read_word(buf, offset + 0x8)
+        return BinaryParser.read_word(buf, offset + 0x8)
 
     def __len__(self):
         return self.header().length()
@@ -159,7 +151,7 @@ class INDEX_ENTRY(Block,  Nestable):
         return True
 
 
-class MFT_INDEX_ENTRY(Block, Nestable):
+class MFT_INDEX_ENTRY(BinaryParser.Block, BinaryParser.Nestable):
     """
     Index entry for the MFT directory index $I30, attribute type 0x90.
     """
@@ -170,7 +162,7 @@ class MFT_INDEX_ENTRY(Block, Nestable):
 
     @staticmethod
     def structure_size(buf, offset, parent):
-        return read_word(buf, offset + 0x8)
+        return BinaryParser.read_word(buf, offset + 0x8)
 
     def __len__(self):
         return self.header().length()
@@ -198,7 +190,7 @@ class MFT_INDEX_ENTRY(Block, Nestable):
             return False
 
 
-class SII_INDEX_ENTRY(Block, Nestable):
+class SII_INDEX_ENTRY(BinaryParser.Block, BinaryParser.Nestable):
     """
     Index entry for the $SECURE:$SII index.
     """
@@ -209,7 +201,7 @@ class SII_INDEX_ENTRY(Block, Nestable):
 
     @staticmethod
     def structure_size(buf, offset, parent):
-        return read_word(buf, offset + 0x8)
+        return BinaryParser.read_word(buf, offset + 0x8)
 
     def __len__(self):
         return self.header().length()
@@ -220,7 +212,7 @@ class SII_INDEX_ENTRY(Block, Nestable):
             1 < self.header().key_lenght() < 0x20
 
 
-class SDH_INDEX_ENTRY(Block, Nestable):
+class SDH_INDEX_ENTRY(BinaryParser.Block, BinaryParser.Nestable):
     """
     Index entry for the $SECURE:$SDH index.
     """
@@ -232,7 +224,7 @@ class SDH_INDEX_ENTRY(Block, Nestable):
 
     @staticmethod
     def structure_size(buf, offset, parent):
-        return read_word(buf, offset + 0x8)
+        return BinaryParser.read_word(buf, offset + 0x8)
 
     def __len__(self):
         return self.header().length()
@@ -251,7 +243,7 @@ class INDEX_HEADER_FLAGS:
     NODE_MASK = 0x1
 
 
-class INDEX_HEADER(Block, Nestable):
+class INDEX_HEADER(BinaryParser.Block, BinaryParser.Nestable):
     def __init__(self, buf, offset, parent):
         super(INDEX_HEADER, self).__init__(buf, offset)
         self.declare_field("dword", "entries_offset", 0x0)
@@ -283,7 +275,7 @@ class INDEX_HEADER(Block, Nestable):
         return self.index_header_flags() & INDEX_HEADER_FLAGS.NODE_MASK
 
 
-class INDEX(Block, Nestable):
+class INDEX(BinaryParser.Block, BinaryParser.Nestable):
     def __init__(self, buf, offset, parent, index_entry_class):
         self._INDEX_ENTRY = index_entry_class
         super(INDEX, self).__init__(buf, offset)
@@ -295,7 +287,7 @@ class INDEX(Block, Nestable):
 
     @staticmethod
     def structure_size(buf, offset, parent):
-        return read_dword(buf, offset + 0x8)
+        return BinaryParser.read_dword(buf, offset + 0x8)
 
     def __len__(self):
         return self.header().allocated_size()
@@ -332,8 +324,9 @@ class INDEX(Block, Nestable):
                         yield e
                     else:
                         logging.debug("Slack entry is invalid.")
-                        raise ParseException("Not a deleted entry")
-                except ParseException:
+                        # TODO(wb): raise a custom exception
+                        raise BinaryParser.ParseException("Not a deleted entry")
+                except BinaryParser.ParseException:
                     logging.debug("Scanning one byte forward.")
                     offset += 1
         except struct.error:
@@ -341,7 +334,7 @@ class INDEX(Block, Nestable):
             pass
 
 
-def INDEX_ROOT(Block, Nestable):
+def INDEX_ROOT(BinaryParser.Block, BinaryParser.Nestable):
     def __init__(self, buf, offset, parent):
         super(INDEX_ROOT, self).__init__(buf, offset)
         self.declare_field("dword", "type", 0x0)
@@ -366,7 +359,7 @@ def INDEX_ROOT(Block, Nestable):
         return 0x10 + len(self.index())
 
 
-class NTATTR_STANDARD_INDEX_HEADER(Block):
+class NTATTR_STANDARD_INDEX_HEADER(BinaryParser.Block):
     def __init__(self, buf, offset, parent):
         logging.debug("INDEX NODE HEADER at %s.", hex(offset))
         super(NTATTR_STANDARD_INDEX_HEADER, self).__init__(buf, offset)
@@ -407,15 +400,16 @@ class NTATTR_STANDARD_INDEX_HEADER(Block):
                         offset += e.length() or 1
                         yield e
                     else:
-                        raise ParseException("Not a deleted entry")
-                except ParseException:
+                        # TODO(wb): raise a custom exception
+                        raise BinaryParser.ParseException("Not a deleted entry")
+                except BinaryParser.ParseException:
                     # ensure we're always moving forward
                     offset += 1
         except struct.error:
             pass
 
 
-class IndexRootHeader(Block):
+class IndexRootHeader(BinaryParser.Block):
     def __init__(self, buf, offset, parent):
         logging.debug("INDEX ROOT HEADER at %s.", hex(offset))
         super(IndexRootHeader, self).__init__(buf, offset)
@@ -485,7 +479,7 @@ class INDEX_ALLOCATION(FixupBlock):
 
 
 
-class IndexEntry(Block):
+class IndexEntry(BinaryParser.Block):
     def __init__(self, buf, offset, parent):
         logging.debug("INDEX ENTRY at %s.", hex(offset))
         super(IndexEntry, self).__init__(buf, offset)
@@ -497,7 +491,7 @@ class IndexEntry(Block):
                            self.current_field_offset(),
                            self.filename_information_length())
         self.declare_field("qword", "child_vcn",
-                           align(self.current_field_offset(), 0x8))
+                           BinaryParser.align(self.current_field_offset(), 0x8))
 
     def filename_information(self):
         return FilenameAttribute(self._buf,
@@ -513,7 +507,7 @@ class StandardInformationFieldDoesNotExist(Exception):
         return "Standard Information attribute field does not exist: %s" % (self._msg)
 
 
-class StandardInformation(Block):
+class StandardInformation(BinaryParser.Block):
     # TODO(wb): implement sizing so we can make this nestable
     def __init__(self, buf, offset, parent):
         logging.debug("STANDARD INFORMATION ATTRIBUTE at %s.", hex(offset))
@@ -546,7 +540,7 @@ class StandardInformation(Block):
         """
         try:
             return self.unpack_dword(0x30)
-        except OverrunBufferException:
+        except BinaryParser.OverrunBufferException:
             raise StandardInformationFieldDoesNotExist("Owner ID")
 
     def security_id(self):
@@ -557,7 +551,7 @@ class StandardInformation(Block):
         """
         try:
             return self.unpack_dword(0x34)
-        except OverrunBufferException:
+        except BinaryParser.OverrunBufferException:
             raise StandardInformationFieldDoesNotExist("Security ID")
 
     def quota_charged(self):
@@ -568,7 +562,7 @@ class StandardInformation(Block):
         """
         try:
             return self.unpack_dword(0x38)
-        except OverrunBufferException:
+        except BinaryParser.OverrunBufferException:
             raise StandardInformationFieldDoesNotExist("Quota Charged")
 
     def usn(self):
@@ -579,11 +573,11 @@ class StandardInformation(Block):
         """
         try:
             return self.unpack_dword(0x40)
-        except OverrunBufferException:
+        except BinaryParser.OverrunBufferException:
             raise StandardInformationFieldDoesNotExist("USN")
 
 
-class FilenameAttribute(Block, Nestable):
+class FilenameAttribute(BinaryParser.Block, BinaryParser.Nestable):
     def __init__(self, buf, offset, parent):
         logging.debug("FILENAME ATTRIBUTE at %s.", hex(offset))
         super(FilenameAttribute, self).__init__(buf, offset)
@@ -602,7 +596,7 @@ class FilenameAttribute(Block, Nestable):
 
     @staticmethod
     def structure_size(buf, offset, parent):
-        return 0x42 + (read_byte(buf, offset + 0x40) * 2)
+        return 0x42 + (BinaryParser.read_byte(buf, offset + 0x40) * 2)
 
     def __len__(self):
         return 0x42 + (self.filename_length() * 2)
@@ -643,7 +637,7 @@ class SlackIndexEntry(IndexEntry):
             return False
 
 
-class Runentry(Block, Nestable):
+class Runentry(BinaryParser.Block, BinaryParser.Nestable):
     def __init__(self, buf, offset, parent):
         super(Runentry, self).__init__(buf, offset)
         logging.debug("RUNENTRY @ %s.", hex(offset))
@@ -659,7 +653,7 @@ class Runentry(Block, Nestable):
 
     @staticmethod
     def structure_size(buf, offset, parent):
-        b = read_byte(buf, offset)
+        b = BinaryParser.read_byte(buf, offset)
         return (b >> 4) + (b & 0x0F) + 1
 
     def __len__(self):
@@ -703,7 +697,7 @@ class Runentry(Block, Nestable):
         return self.lsb2num(self.length_binary())
 
 
-class Runlist(Block):
+class Runlist(BinaryParser.Block):
     def __init__(self, buf, offset, parent):
         super(Runlist, self).__init__(buf, offset)
         logging.debug("RUNLIST @ %s.", hex(offset))
@@ -712,7 +706,7 @@ class Runlist(Block):
     def structure_size(buf, offset, parent):
         length = 0
         while True:
-            b = read_byte(buf, offset + length)
+            b = BinaryParser.read_byte(buf, offset + length)
             length += 1
             if b == 0:
                 return length
@@ -755,7 +749,7 @@ class ATTR_TYPE:
     INDEX_ALLOCATION = 0xA0
 
 
-class Attribute(Block, Nestable):
+class Attribute(BinaryParser.Block, BinaryParser.Nestable):
     TYPES = {
         16: "$STANDARD INFORMATION",
         32: "$ATTRIBUTE LIST",
@@ -828,7 +822,7 @@ class Attribute(Block, Nestable):
 
     @staticmethod
     def structure_size(buf, offset, parent):
-        s = read_dword(buf, offset + 0x4)
+        s = BinaryParser.read_dword(buf, offset + 0x4)
         return s + (8 - (s % 8))
 
     def __len__(self):
@@ -1022,7 +1016,7 @@ class NTFSFile():
                         return
                     try:
                         record = MFTRecord(buf, 0, False, inode=count)
-                    except OverrunBufferException:
+                    except BinaryParser.OverrunBufferException:
                         logging.debug("Failed to parse MFT record %s", str(count))
                         continue
                     logging.debug("Yielding record %d", count)
@@ -1045,7 +1039,7 @@ class NTFSFile():
                         return
                     try:
                         record = MFTRecord(buf, 0, False, inode=count)
-                    except OverrunBufferException:
+                    except BinaryParser.OverrunBufferException:
                         logging.debug("Failed to parse MFT record %s", str(count))
                         continue
                     logging.debug("Yielding record %d", count)
@@ -1074,7 +1068,7 @@ class NTFSFile():
         return MFTRecord(buf, 0, False)
 
     # memoization is key here.
-    @memoize(100, keyfunc=lambda r, _:
+    @BinaryParser.memoize(100, keyfunc=lambda r, _:
              str(r.magic()) + str(r.lsn()) + str(r.link_count()) + \
              str(r.mft_record_number()) + str(r.flags()))
     def mft_record_build_path(self, record, cycledetector=None):
@@ -1218,7 +1212,7 @@ class MFTEnumerator(object):
         start = record_num * MFT_RECORD_SIZE
         end = start + MFT_RECORD_SIZE
         if end > len(self._buf):
-            raise OverrunBufferException(end, len(self._buf))
+            raise BinaryParser.OverrunBufferException(end, len(self._buf))
 
         return array.array("B", self._buf[start:end])
 
@@ -1233,7 +1227,7 @@ class MFTEnumerator(object):
 
 
         record_buf = self.get_record_buf(record_num)
-        if read_dword(record_buf, 0x0) != 0x454C4946:
+        if BinaryParser.read_dword(record_buf, 0x0) != 0x454C4946:
             raise InvalidRecordException("record_num: %d" % record_num)
 
         record = MFTRecord(record_buf, 0, False, inode=record_num)
@@ -1249,7 +1243,7 @@ class MFTEnumerator(object):
                 record = self.get_record(index)
                 yield record
                 index += 1
-            except OverrunBufferException:
+            except BinaryParser.OverrunBufferException:
                 return
             except InvalidRecordException:
                 index += 1
@@ -1306,7 +1300,7 @@ class MFTEnumerator(object):
 
         try:
             parent_record = self.get_record(parent_record_num)
-        except (OverrunBufferException, InvalidRecordException):
+        except (BinaryParser.OverrunBufferException, InvalidRecordException):
             return ORPHAN_ENTRY + FILE_SEP + record_filename
 
         if parent_record.sequence_number() != parent_seq_num:
@@ -1388,7 +1382,7 @@ class MFTTree(object):
 
         try:
             parent_record = mft_enumerator.get_record(parent_record_num)
-        except (OverrunBufferException, InvalidRecordException):
+        except (BinaryParser.OverrunBufferException, InvalidRecordException):
             parent_record_num = MFTTree.ORPHAN_INDEX
             parent_record = None
 
@@ -1411,7 +1405,7 @@ class MFTTree(object):
             parent_node.add_child_record_number(record_num)
 
     def build(self, record_cache=None,
-              path_cache=None, progress_class=NullProgress):
+              path_cache=None, progress_class=Progress.NullProgress):
         DEFAULT_CACHE_SIZE = 1024
         if record_cache is None:
             record_cache = Cache(size_limit=DEFAULT_CACHE_SIZE)
