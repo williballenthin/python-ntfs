@@ -18,13 +18,10 @@
 #   limitations under the License.
 #
 #   Version v.1.2
-from BinaryParser import Block
-from BinaryParser import Nestable
-from BinaryParser import ParseException
-from BinaryParser import align
-from BinaryParser import read_byte
-from BinaryParser import read_word
-from BinaryParser import read_dword
+
+from .. import BinaryParser
+from ..BinaryParser import Block
+from ..BinaryParser import Nestable
 
 
 class NULL_OBJECT(object):
@@ -87,7 +84,7 @@ class SID(Block, Nestable):
 
     @staticmethod
     def structure_size(buf, offset, parent):
-        sub_auth_count = read_byte(buf, offset + 1)
+        sub_auth_count = BinaryParser.read_byte(buf, offset + 1)
         auth_size = SID_IDENTIFIER_AUTHORITY.structure_size(buf, offset + 2, parent)
         return 2 + auth_size + (sub_auth_count * 4)
 
@@ -205,7 +202,8 @@ class ACE(Block):
         elif header.ace_type() == ACE_TYPES.SYSTEM_ALARM_OBJECT_ACE_TYPE:
             return SYSTEM_ALARM_OBJECT_ACE(buf, offset, parent)
         else:
-            raise ParseException("unknown ACE type")
+            # TODO(wb): raise a custom exception type
+            raise BinaryParser.ParseException("unknown ACE type")
 
 
 class StandardACE(ACE, Nestable):
@@ -217,7 +215,7 @@ class StandardACE(ACE, Nestable):
 
     @staticmethod
     def structure_size(buf, offset, parent):
-        return read_word(buf, offset + 0x2)
+        return BinaryParser.read_word(buf, offset + 0x2)
 
     def __len__(self):
         return self.size()
@@ -262,7 +260,7 @@ class ObjectACE(ACE, Nestable):
 
     @staticmethod
     def structure_size(buf, offset, parent):
-        return read_word(buf, offset + 0x2)
+        return BinaryParser.read_word(buf, offset + 0x2)
 
     def __len__(self):
         return self.size()
@@ -301,7 +299,7 @@ class ACL(Block, Nestable):
 
     @staticmethod
     def structure_size(buf, offset, parent):
-        return read_word(buf, offset + 0x2)
+        return BinaryParser.read_word(buf, offset + 0x2)
 
     def __len__(self):
         return self.size()
@@ -312,7 +310,7 @@ class ACL(Block, Nestable):
             a = ACE.get_ace(self._buf, self.offset() + ofs, self)
             yield a
             ofs += a.size()
-            ofs = align(ofs, 4)
+            ofs = BinaryParser.align(ofs, 4)
 
 
 class NULL_ACL(object):
@@ -418,7 +416,7 @@ class SDS_ENTRY(Block, Nestable):
 
     @staticmethod
     def structure_size(buf, offset, parent):
-        return read_dword(buf, offset + 0x10)
+        return BinaryParser.read_dword(buf, offset + 0x10)
 
     def __len__(self):
         return self.length()
@@ -436,12 +434,12 @@ class SDS(Block):
             if len(s) != 0:
                 yield s
                 ofs += len(s)
-                ofs = align(ofs, 0x10)
+                ofs = BinaryParser.align(ofs, 0x10)
             else:
                 if ofs % 0x10000 == 0:
                     return
                 else:
-                    ofs = align(ofs, 0x10000)
+                    ofs = BinaryParser.align(ofs, 0x10000)
 
 
 def main():
