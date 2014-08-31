@@ -26,8 +26,10 @@ import logging
 from datetime import datetime
 from collections import OrderedDict  # python 2.7 only
 
-from .. import BinaryParser
 from .. import Progress
+from .. import BinaryParser
+from ..BinaryParser import Block
+from ..BinaryParser import Nestable
 
 
 class INDXException(Exception):
@@ -47,7 +49,7 @@ class INDXException(Exception):
         return "INDX Exception: %s" % (self._value)
 
 
-class FixupBlock(BinaryParse.Block):
+class FixupBlock(Block):
     def __init__(self, buf, offset, parent):
         super(FixupBlock, self).__init__(buf, offset)
 
@@ -80,7 +82,7 @@ class INDEX_ENTRY_FLAGS:
     INDEX_ENTRY_SPACE_FILLER = 0xFFFF
 
 
-class INDEX_ENTRY_HEADER(BinaryParser.Block, BinaryParser.Nestable):
+class INDEX_ENTRY_HEADER(Block, Nestable):
     def __init__(self, buf, offset, parent):
         super(INDEX_ENTRY_HEADER, self).__init__(buf, offset)
         self.declare_field("word", "length", 0x8)
@@ -125,7 +127,7 @@ class SECURE_INDEX_ENTRY_HEADER(INDEX_ENTRY_HEADER):
         self.declare_field("dword", "reserved")
 
 
-class INDEX_ENTRY(BinaryParser.Block, BinaryParser.Nestable):
+class INDEX_ENTRY(Block, Nestable):
     """
     NOTE: example structure. See the more specific classes below.
       Probably do not instantiate.
@@ -151,7 +153,7 @@ class INDEX_ENTRY(BinaryParser.Block, BinaryParser.Nestable):
         return True
 
 
-class MFT_INDEX_ENTRY(BinaryParser.Block, BinaryParser.Nestable):
+class MFT_INDEX_ENTRY(Block, Nestable):
     """
     Index entry for the MFT directory index $I30, attribute type 0x90.
     """
@@ -190,7 +192,7 @@ class MFT_INDEX_ENTRY(BinaryParser.Block, BinaryParser.Nestable):
             return False
 
 
-class SII_INDEX_ENTRY(BinaryParser.Block, BinaryParser.Nestable):
+class SII_INDEX_ENTRY(Block, Nestable):
     """
     Index entry for the $SECURE:$SII index.
     """
@@ -212,7 +214,7 @@ class SII_INDEX_ENTRY(BinaryParser.Block, BinaryParser.Nestable):
             1 < self.header().key_lenght() < 0x20
 
 
-class SDH_INDEX_ENTRY(BinaryParser.Block, BinaryParser.Nestable):
+class SDH_INDEX_ENTRY(Block, Nestable):
     """
     Index entry for the $SECURE:$SDH index.
     """
@@ -243,7 +245,7 @@ class INDEX_HEADER_FLAGS:
     NODE_MASK = 0x1
 
 
-class INDEX_HEADER(BinaryParser.Block, BinaryParser.Nestable):
+class INDEX_HEADER(Block, Nestable):
     def __init__(self, buf, offset, parent):
         super(INDEX_HEADER, self).__init__(buf, offset)
         self.declare_field("dword", "entries_offset", 0x0)
@@ -275,7 +277,7 @@ class INDEX_HEADER(BinaryParser.Block, BinaryParser.Nestable):
         return self.index_header_flags() & INDEX_HEADER_FLAGS.NODE_MASK
 
 
-class INDEX(BinaryParser.Block, BinaryParser.Nestable):
+class INDEX(Block, Nestable):
     def __init__(self, buf, offset, parent, index_entry_class):
         self._INDEX_ENTRY = index_entry_class
         super(INDEX, self).__init__(buf, offset)
@@ -334,7 +336,7 @@ class INDEX(BinaryParser.Block, BinaryParser.Nestable):
             pass
 
 
-def INDEX_ROOT(BinaryParser.Block, BinaryParser.Nestable):
+def INDEX_ROOT(Block, Nestable):
     def __init__(self, buf, offset, parent):
         super(INDEX_ROOT, self).__init__(buf, offset)
         self.declare_field("dword", "type", 0x0)
@@ -359,7 +361,7 @@ def INDEX_ROOT(BinaryParser.Block, BinaryParser.Nestable):
         return 0x10 + len(self.index())
 
 
-class NTATTR_STANDARD_INDEX_HEADER(BinaryParser.Block):
+class NTATTR_STANDARD_INDEX_HEADER(Block):
     def __init__(self, buf, offset, parent):
         logging.debug("INDEX NODE HEADER at %s.", hex(offset))
         super(NTATTR_STANDARD_INDEX_HEADER, self).__init__(buf, offset)
@@ -409,7 +411,7 @@ class NTATTR_STANDARD_INDEX_HEADER(BinaryParser.Block):
             pass
 
 
-class IndexRootHeader(BinaryParser.Block):
+class IndexRootHeader(Block):
     def __init__(self, buf, offset, parent):
         logging.debug("INDEX ROOT HEADER at %s.", hex(offset))
         super(IndexRootHeader, self).__init__(buf, offset)
@@ -479,7 +481,7 @@ class INDEX_ALLOCATION(FixupBlock):
 
 
 
-class IndexEntry(BinaryParser.Block):
+class IndexEntry(Block):
     def __init__(self, buf, offset, parent):
         logging.debug("INDEX ENTRY at %s.", hex(offset))
         super(IndexEntry, self).__init__(buf, offset)
@@ -507,7 +509,7 @@ class StandardInformationFieldDoesNotExist(Exception):
         return "Standard Information attribute field does not exist: %s" % (self._msg)
 
 
-class StandardInformation(BinaryParser.Block):
+class StandardInformation(Block):
     # TODO(wb): implement sizing so we can make this nestable
     def __init__(self, buf, offset, parent):
         logging.debug("STANDARD INFORMATION ATTRIBUTE at %s.", hex(offset))
@@ -577,7 +579,7 @@ class StandardInformation(BinaryParser.Block):
             raise StandardInformationFieldDoesNotExist("USN")
 
 
-class FilenameAttribute(BinaryParser.Block, BinaryParser.Nestable):
+class FilenameAttribute(Block, Nestable):
     def __init__(self, buf, offset, parent):
         logging.debug("FILENAME ATTRIBUTE at %s.", hex(offset))
         super(FilenameAttribute, self).__init__(buf, offset)
@@ -637,7 +639,7 @@ class SlackIndexEntry(IndexEntry):
             return False
 
 
-class Runentry(BinaryParser.Block, BinaryParser.Nestable):
+class Runentry(Block, Nestable):
     def __init__(self, buf, offset, parent):
         super(Runentry, self).__init__(buf, offset)
         logging.debug("RUNENTRY @ %s.", hex(offset))
@@ -697,7 +699,7 @@ class Runentry(BinaryParser.Block, BinaryParser.Nestable):
         return self.lsb2num(self.length_binary())
 
 
-class Runlist(BinaryParser.Block):
+class Runlist(Block):
     def __init__(self, buf, offset, parent):
         super(Runlist, self).__init__(buf, offset)
         logging.debug("RUNLIST @ %s.", hex(offset))
@@ -749,7 +751,7 @@ class ATTR_TYPE:
     INDEX_ALLOCATION = 0xA0
 
 
-class Attribute(BinaryParser.Block, BinaryParser.Nestable):
+class Attribute(Block, Nestable):
     TYPES = {
         16: "$STANDARD INFORMATION",
         32: "$ATTRIBUTE LIST",
