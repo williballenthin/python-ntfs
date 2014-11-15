@@ -25,11 +25,7 @@ import logging
 import cPickle
 from datetime import datetime
 
-
 g_logger = logging.getLogger("ntfs.BinaryParser")
-
-# TODO: remove this
-verbose = False
 
 
 def unpack_from(fmt, buf, off=0):
@@ -86,25 +82,6 @@ class Mmap(object):
     def __exit__(self, type, value, traceback):
         self._mmap.close()
         self._f.close()
-
-
-def debug(*message):
-    global verbose
-    if verbose:
-        print "# [d] %s" % (", ".join(map(str, message)))
-
-
-def warning(message):
-    print "# [w] %s" % (message)
-
-
-def info(message):
-    print "# [i] %s" % (message)
-
-
-def error(message):
-    print "# [e] %s" % (message)
-    sys.exit(-1)
 
 
 def hex_dump(src, start_addr=0):
@@ -579,17 +556,6 @@ class Block(object):
         setattr(self, "_off_" + name, offset)
         self.add_explicit_field(offset, typename, name, length, count)
 
-        try:
-            debug("(%s) %s\t@ %s\t: %s" % (typename.upper(),
-                                           name,
-                                           hex(self.absolute_offset(offset)),
-                                           str(handler())[:0x20]))
-        except ValueError: # invalid Windows timestamp
-            debug("(%s) %s\t@ %s\t: %s" % (typename.upper(),
-                                           name,
-                                           hex(self.absolute_offset(offset)),
-                                           "<<error>>"))
-
     def add_explicit_field(self, offset, typename, name, length=None, count=1):
         """
         The `Block` class tracks the fields that have been added so that you can
@@ -608,7 +574,6 @@ class Block(object):
         @rtype: None
         @return: None
         """
-        
         if type(typename) == type:
             typename = typename.__name__
         self._declared_fields.append({
