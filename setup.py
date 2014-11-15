@@ -14,6 +14,8 @@ setup(name="python-ntfs",
         packages=[
             "ntfs",
             "ntfs.mft",
+            "ntfs.volume",
+            "ntfs.filesystem",
             #"nfts.secure",
             #"ntfs.logfile",
             #"ntfs.usnjrnl",

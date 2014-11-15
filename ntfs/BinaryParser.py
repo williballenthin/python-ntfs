@@ -23,8 +23,47 @@ import sys
 from datetime import datetime
 import types
 import cPickle
+import struct
 
+
+# TODO: remove this
 verbose = False
+
+
+def unpack_from(fmt, buf, off=0):
+    """
+    Shim struct.unpack_from and divert unpacking of __unpackable__ things.
+
+    Otherwise, you'd get an exception like:
+      TypeError: unpack_from() argument 1 must be convertible to a buffer, not FileMap
+
+    So, we extract a true sub-buffer from the FileMap, and feed this
+      back into the old unpack function.
+    Theres an extra allocation and copy, but there's no getting
+      around that.
+    """
+    if isinstance(buf, basestring):
+        return struct.unpack_from(fmt, buf, off)
+    elif not hasattr(buf, "__unpackable__"):
+        return struct.unpack_from(fmt, buf, off)
+    else:
+        size = struct.calcsize(fmt)
+        buf = buf[off:off + size]
+        return struct.unpack_from(fmt, buf, 0x0)
+
+
+def unpack(fmt, string):
+    """
+    Like the shimmed unpack_from, but for struct.unpack.
+    """
+    if isinstance(buf, basestring):
+        return struct.unpack(fmt, string)
+    elif not hasattr(buf, "__unpackable__"):
+        return struct.unpack(fmt, string)
+    else:
+        size = struct.calcsize(fmt)
+        buf = string[:size]
+        return struct.unpack(fmt, buf, 0x0)
 
 
 class Mmap(object):
