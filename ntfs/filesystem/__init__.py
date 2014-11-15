@@ -31,9 +31,9 @@ class Filesystem(object):
     pass
 
 
-class NtfsVBR(Block):
+class NTFSVBR(Block):
     def __init__(self, volume):
-        super(NtfsVBR, self).__init__(volume, 0)
+        super(NTFSVBR, self).__init__(volume, 0)
         self.declare_field("byte", "jump", offset=0x0, count=3)
         self.declare_field("qword", "oem_id")
         self.declare_field("word", "bytes_per_sector")
@@ -86,16 +86,16 @@ INODE_MFT = 0
 INODE_MFTMIRR = 1
 
 
-class CorruptNtfsFilesystemError(Exception):
+class CorruptNTFSFilesystemError(Exception):
     def __init__(self, msg="no details"):
-        super(CorruptNtfsFilesystemError, self).__init__(self)
+        super(CorruptNTFSFilesystemError, self).__init__(self)
         self._msg = msg
 
     def __str__(self):
         return "%s(%s)" % (self.__class__.__name__, self._msg)
 
 
-class MFTDataIsResidentError(CorruptNtfsFilesystemError):
+class MFTDataIsResidentError(CorruptNTFSFilesystemError):
     pass
 
 
@@ -177,19 +177,19 @@ class NonResidentAttributeData(object):
         return ret
 
 
-class NtfsFilesystem(object):
+class NTFSFilesystem(object):
     def __init__(self, volume, cluster_size=None):
-        super(NtfsFilesystem, self).__init__()
+        super(NTFSFilesystem, self).__init__()
         self._volume = volume
         self._cluster_size = cluster_size
-        self._vbr = NtfsVBR(self._volume)
+        self._vbr = NTFSVBR(self._volume)
         if cluster_size is not None:
             self._cluster_size = cluster_size
         else:
             self._cluster_size = self._vbr.bytes_per_sector() * self._vbr.sectors_per_cluster()
 
         self._clusters = ClusterAccessor(self._volume, self._cluster_size)
-        self._logger = logging.getLogger("NtfsFilesystem")
+        self._logger = logging.getLogger("NTFSFilesystem")
 
     def get_mft_buf(self):
         mft_chunk = self._clusters[self._vbr.mft_lcn()]
@@ -211,8 +211,8 @@ def main():
 
     with Mmap(sys.argv[1]) as buf:
         v = FlatVolume(buf, int(sys.argv[2]))
-        fs = NtfsFilesystem(v)
-        # note optimization: copy entire mft buffer from NonResidentNtfsAttribute
+        fs = NTFSFilesystem(v)
+        # note optimization: copy entire mft buffer from NonResidentNTFSAttribute
         #  to avoid getslice lookups
         mft_data = fs.get_mft_buf()[:]
         enum = MFTEnumerator(mft_data)
