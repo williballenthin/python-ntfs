@@ -9,6 +9,7 @@ class Volume(Block):
 
     Use FlatVolume over this.
     """
+    __unpackable__ = True
     def __init__(self, buf, offset, sector_size=512):
         super(Volume, self).__init__(buf, offset)
         self._sector_size = 512

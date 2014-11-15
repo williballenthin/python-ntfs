@@ -287,6 +287,7 @@ class FileMap(object):
             eg. FileMap over ZipFile gives you a random access buffer
                   thats backed by a compressed image on the file system.
     """
+    __unpackable__ = True
     def __init__(self, filelike, block_size=MEGABYTE,
                  cache_size=10, size=None):
         """

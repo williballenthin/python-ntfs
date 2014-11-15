@@ -14,6 +14,11 @@ from ..BinaryParser import Block
 from ..BinaryParser import Nestable
 
 
+g_logger = logging.getLogger("ntfs.mft")
+
+# TODO: remove most references to array.array
+
+
 class INDXException(Exception):
     """
     Base Exception class for INDX parsing.
@@ -32,10 +37,30 @@ class INDXException(Exception):
 
 
 class FixupBlock(Block):
+    """
+    a fixup block requires modification to the underlying buffer.
+      - we don't want to do it to the underlying buffer
+        - if its mmapped, we'd change the source file
+        - if its a string, then this would raise an exception
+      - we can keep a shadow file/buffer for writes to the underlying storage
+        - this is most complete
+        - also most complex to implement
+      - we can make a copy of the buffer, and work with that
+    we take the third option for ease of implementation
+
+    some notes:
+      - we change the buffer for this object from whats passed to the constructor
+      - we change the offset for this object from whats passed to the constructor
+      - we assume the total object size is no greater than the size of the fixups!
+    """
     def __init__(self, buf, offset, parent):
         super(FixupBlock, self).__init__(buf, offset)
 
     def fixup(self, num_fixups, fixup_value_offset):
+        fixup_buffer = array.array("b", self.unpack_binary(0, length=(num_fixups - 1) * 512))
+        self._buf = fixup_buffer
+        self._offset = 0
+
         fixup_value = self.unpack_word(fixup_value_offset)
 
         for i in range(0, num_fixups - 1):
@@ -900,9 +925,9 @@ class MFTRecord(FixupBlock):
         """
         fn = None
         for a in self.attributes():
-            # TODO optimize to self._buf here
             if a.type() == ATTR_TYPE.FILENAME_INFORMATION:
                 try:
+                    # TODO optimize to self._buf here
                     value = a.value()
                     check = FilenameAttribute(value, 0, self)
                     if check.filename_type() == 0x0001 or \
@@ -1198,7 +1223,8 @@ class MFTEnumerator(object):
         if end > len(self._buf):
             raise BinaryParser.OverrunBufferException(end, len(self._buf))
 
-        return array.array("B", self._buf[start:end])
+        buf = self._buf[start:end]
+        return array.array("B", buf)
 
     def get_record(self, record_num):
         """
@@ -1208,7 +1234,6 @@ class MFTEnumerator(object):
         if self._record_cache.exists(record_num):
             self._record_cache.touch(record_num)
             return self._record_cache.get(record_num)
-
 
         record_buf = self.get_record_buf(record_num)
         if BinaryParser.read_dword(record_buf, 0x0) != 0x454C4946:
