@@ -34,6 +34,10 @@ class NoParentError(FileSystemError):
     pass
 
 
+class UnsupportedPathError(FileSystemError):
+    pass
+
+
 class File(object):
     """
     interface
@@ -47,15 +51,63 @@ class File(object):
         """
         raise NotImplementedError()
 
+    def read(self, offset, length):
+        raise NotImplementedError()
+
 
 class NTFSFileMetadataMixin(object):
     def __init__(self, record):
         self._record = record
 
-    def get_si_birth_timestamp(self):
-        pass
+    def get_filenames(self):
+        ret = []
+        for fn in self._record.filename_informations():
+            ret.append(fn.filename())
+        return ret
 
-    # etc
+    def get_si_created_timestamp(self):
+        return self._record.standard_information().created_time()
+
+    def get_si_accessed_timestamp(self):
+        return self._record.standard_information().accessed_time()
+
+    def get_si_changed_timestamp(self):
+        return self._record.standard_information().changed_time()
+
+    def get_si_modified_timestamp(self):
+        return self._record.standard_information().modified_time()
+
+    def get_fn_created_timestamp(self):
+        return self._record.filename_information().created_time()
+
+    def get_fn_accessed_timestamp(self):
+        return self._record.filename_information().accessed_time()
+
+    def get_fn_changed_timestamp(self):
+        return self._record.filename_information().changed_time()
+
+    def get_fn_modified_timestamp(self):
+        return self._record.filename_information().modified_time()
+
+    def is_file(self):
+        return self._record.is_file()
+
+    def is_directory(self):
+        return self._record.is_directory()
+
+    def get_size(self):
+        if self.is_directory():
+            return 0
+        else:
+            data_attribute = self._record.data_attribute()
+            if data_attribute is not None:
+                if data_attribute.non_resident() == 0:
+                    size = len(data_attribute.value())
+                else:
+                    size = data_attribute.data_size()
+            else:
+                size = self._record.filename_information().logical_size()
+        return size
 
 
 class NTFSFile(File, NTFSFileMetadataMixin):
@@ -73,6 +125,11 @@ class NTFSFile(File, NTFSFileMetadataMixin):
 
     def __str__(self):
         return "File(name: %s)" % (self.get_name())
+
+    def read(self, offset, length):
+        data_attribute = self._record.data_attribute()
+        data = self._fs.get_attribute_data(data_attribute)
+        return data[offset:offset+length]
 
 
 class ChildNotFoundError(Exception):
@@ -105,12 +162,7 @@ class Directory(object):
         """
         @raise ChildNotFoundError: if the given filename is not found.
         """
-        name_lower = name.lower()
-        for child in self.get_children():
-            if name_lower == child.get_name().lower():
-                return child
-        raise ChildNotFoundError()
-
+        raise NotImplementedError()
 
 class PathDoesNotExistError(Exception):
     pass
@@ -153,14 +205,50 @@ class NTFSDirectory(Directory, NTFSFileMetadataMixin):
     def __str__(self):
         return "Directory(name: %s)" % (self.get_name())
 
+    def get_child(self, name):
+        name_lower = name.lower()
+        for child in self.get_children():
+            if len(child.get_filenames()) > 1:
+                g_logger.debug("file names: %s -> %s",
+                  child.get_name(), child.get_filenames())
+            for fn in child.get_filenames():
+                if name_lower == fn.lower():
+                    return child
+        raise ChildNotFoundError()
+
+    def _split_path(self, path):
+        """
+        Hack to try to support both types of file system paths:
+          - forward slash, /etc
+          - backslash, C:\windows\system32
+
+        Linux uses forward slashes, so we'd like that when working with FUSE.
+        The original file system used backslashes, so we'd also like that.
+
+        This is a poor attempt at doing both:
+          - detect which slash type is in use
+          - don't support both at the same time
+
+        This works like string.partition(PATH_SEPARATOR)
+        """
+        if "\\" in path:
+            if "/" in path:
+                raise UnsupportedPathError(path)
+            return path.partition("\\")
+
+        elif "/" in path:
+            if "\\" in path:
+                raise UnsupportedPathError(path)
+            return path.partition("/")
+        else:
+            return path, "", ""
+
     def get_path_entry(self, path):
         g_logger.debug("get_path_entry: path: %s", path)
-        if "\\" not in path:
-            g_logger.debug("no slash")
+        imm, slash, rest = self._split_path(path)
+        if slash == "":
             return self.get_child(path)
         else:
-            imm, _, rest = path.partition("\\")
-            g_logger.debug("%s, %s, %s", imm, _, rest)
             if rest == "":
                 return self
 
@@ -355,7 +443,6 @@ class NTFSFilesystem(object):
             return NonResidentAttributeData(self._clusters, attribute.runlist())
 
     def get_mft_buffer(self):
-        g_logger.debug("mft: %s", hex(self._vbr.mft_lcn()))
         mft_chunk = self._clusters[self._vbr.mft_lcn()]
         mft_mft_record = MFTRecord(mft_chunk, 0, None)
         mft_data_attribute = mft_mft_record.data_attribute()
@@ -389,25 +476,27 @@ class NTFSFilesystem(object):
         return NTFSDirectory(self, parent_record)
 
     def get_record_children(self, record):
-        ret = []
+        # we use a map here to de-dup entries with different filename types
+        #  such as 8.3, POSIX, or Windows,  but the same ultimate MFT reference
+        ret = {}  # type: dict(int, MFTRecord)
         if not record.is_directory():
-            return ret
+            return ret.values()
 
         # TODO: cleanup the duplication here
         try:
             indx_alloc_attr = record.attribute(ATTR_TYPE.INDEX_ALLOCATION)
             indx_alloc = INDEX_ALLOCATION(self.get_attribute_data(indx_alloc_attr), 0)
-            g_logger.debug("INDEX_ALLOCATION len: %s", hex(len(indx_alloc)))
-            g_logger.debug("alloc:\n%s", indx_alloc.get_all_string(indent=2))
+            #g_logger.debug("INDEX_ALLOCATION len: %s", hex(len(indx_alloc)))
+            #g_logger.debug("alloc:\n%s", indx_alloc.get_all_string(indent=2))
             indx = indx_alloc
 
             for block in indx.blocks():
                 for entry in block.index().entries():
                     ref = MREF(entry.header().mft_reference())
-                    if ref == INODE_ROOT and entry.filename_information().filename() == ".":
+                    if ref == INODE_ROOT and \
+                       entry.filename_information().filename() == ".":
                         continue
-                    ret.append(self._enumerator.get_record(ref))
-
+                    ret[ref] = self._enumerator.get_record(ref)
 
         except AttributeNotFoundError:
             indx_root_attr = record.attribute(ATTR_TYPE.INDEX_ROOT)
@@ -416,11 +505,12 @@ class NTFSFilesystem(object):
 
             for entry in indx.index().entries():
                 ref = MREF(entry.header().mft_reference())
-                if ref == INODE_ROOT and entry.filename_information().filename() == ".":
+                if ref == INODE_ROOT and \
+                   entry.filename_information().filename() == ".":
                     continue
-                ret.append(self._enumerator.get_record(ref))
+                ret[ref] = self._enumerator.get_record(ref)
 
-        return ret
+        return ret.values()
 
 
 def main():

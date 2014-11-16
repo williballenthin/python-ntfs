@@ -480,24 +480,28 @@ class INDEX_ALLOCATION(FixupBlock):
     @staticmethod
     def guess_num_blocks(buf, offset):
         count = 0
+        # TODO: don't hardcode things
         BLOCK_SIZE = 0x1000
         try:
             while BinaryParser.read_dword(buf, offset) == 0x58444e49:  # "INDX"
                 offset += BLOCK_SIZE
                 count += 1
-        except IndexError:
+        except (IndexError, BinaryParser.OverrunBufferException):
             return count
         return count
 
     def blocks(self):
         for i in xrange(INDEX_ALLOCATION.guess_num_blocks(self._buf, self.offset())):
+            # TODO: don't hardcode things
             yield INDEX_BLOCK(self._buf, self._offset + 0x1000 * i)
 
     @staticmethod
     def structure_size(buf, offset, parent):
+        # TODO: don't hardcode things
         return 0x1000 * INDEX_ALLOCATION.guess_num_blocks(buf, offset)
 
     def __len__(self):
+        # TODO: don't hardcode things
         return 0x1000 * INDEX_ALLOCATION.guess_num_blocks(self._buf, self._offset)
 
 
@@ -926,6 +930,25 @@ class MFTRecord(FixupBlock):
         return self.flags() & MFT_RECORD_FLAGS.MFT_RECORD_IN_USE
 
     # this a required resident attribute
+    def filename_informations(self):
+        """
+        MFT Records may have more than one FN info attribute,
+        each with a different type of filename (8.3, POSIX, etc.)
+
+        This function returns all of the these attributes.
+        """
+        ret = []
+        for a in self.attributes():
+            if a.type() == ATTR_TYPE.FILENAME_INFORMATION:
+                try:
+                    value = a.value()
+                    check = FilenameAttribute(value, 0, self)
+                    ret.append(check)
+                except Exception:
+                    pass
+        return ret
+
+    # this a required resident attribute
     def filename_information(self):
         """
         MFT Records may have more than one FN info attribute,
@@ -935,18 +958,14 @@ class MFTRecord(FixupBlock):
           that is, it tends towards Win32, then POSIX, and then 8.3.
         """
         fn = None
-        for a in self.attributes():
-            if a.type() == ATTR_TYPE.FILENAME_INFORMATION:
-                try:
-                    # TODO optimize to self._buf here
-                    value = a.value()
-                    check = FilenameAttribute(value, 0, self)
-                    if check.filename_type() == 0x0001 or \
-                       check.filename_type() == 0x0003:
-                        return check
-                    fn = check
-                except Exception:
-                    pass
+        for check in self.filename_informations():
+            try:
+                if check.filename_type() == 0x0001 or \
+                   check.filename_type() == 0x0003:
+                    return check
+                fn = check
+            except Exception:
+                pass
         return fn
 
     # this a required resident attribute
