@@ -11,6 +11,7 @@ from ntfs.mft.MFT import INDEX_ROOT
 from ntfs.mft.MFT import MFTEnumerator
 from ntfs.mft.MFT import MFT_RECORD_SIZE
 from ntfs.mft.MFT import INDEX_ALLOCATION
+from ntfs.mft.MFT import AttributeNotFoundError
 
 
 g_logger = logging.getLogger("ntfs.filesystem")
@@ -55,7 +56,6 @@ class NTFSFileMetadataMixin(object):
         pass
 
     # etc
-
 
 
 class NTFSFile(File, NTFSFileMetadataMixin):
@@ -112,6 +112,14 @@ class Directory(object):
         raise ChildNotFoundError()
 
 
+class PathDoesNotExistError(Exception):
+    pass
+
+
+class DirectoryDoesNotExistError(PathDoesNotExistError):
+    pass
+
+
 class NTFSDirectory(Directory, NTFSFileMetadataMixin):
     def __init__(self, filesystem, mft_record):
         Directory.__init__(self)
@@ -144,6 +152,23 @@ class NTFSDirectory(Directory, NTFSFileMetadataMixin):
 
     def __str__(self):
         return "Directory(name: %s)" % (self.get_name())
+
+    def get_path_entry(self, path):
+        g_logger.debug("get_path_entry: path: %s", path)
+        if "\\" not in path:
+            g_logger.debug("no slash")
+            return self.get_child(path)
+        else:
+            imm, _, rest = path.partition("\\")
+            g_logger.debug("%s, %s, %s", imm, _, rest)
+            if rest == "":
+                return self
+
+            child = self.get_child(imm)
+            if not isinstance(child, NTFSDirectory):
+                raise DirectoryDoesNotExistError()
+
+            return child.get_path_entry(rest)
 
 
 class Filesystem(object):
@@ -368,21 +393,32 @@ class NTFSFilesystem(object):
         if not record.is_directory():
             return ret
 
+        # TODO: cleanup the duplication here
         try:
             indx_alloc_attr = record.attribute(ATTR_TYPE.INDEX_ALLOCATION)
             indx_alloc = INDEX_ALLOCATION(self.get_attribute_data(indx_alloc_attr), 0)
+            g_logger.debug("INDEX_ALLOCATION len: %s", hex(len(indx_alloc)))
+            g_logger.debug("alloc:\n%s", indx_alloc.get_all_string(indent=2))
             indx = indx_alloc
-            # TODO: i'm not sure we're parsing all blocks here
+
+            for block in indx.blocks():
+                for entry in block.index().entries():
+                    ref = MREF(entry.header().mft_reference())
+                    if ref == INODE_ROOT and entry.filename_information().filename() == ".":
+                        continue
+                    ret.append(self._enumerator.get_record(ref))
+
+
         except AttributeNotFoundError:
             indx_root_attr = record.attribute(ATTR_TYPE.INDEX_ROOT)
             indx_root = INDEX_ROOT(self.get_attribute_data(indx_root_attr), 0)
             indx = indx_root
 
-        for entry in indx.index().entries():
-            ref = MREF(entry.header().mft_reference())
-            if ref == INODE_ROOT and entry.filename_information().filename() == ".":
-                continue
-            ret.append(self._enumerator.get_record(ref))
+            for entry in indx.index().entries():
+                ref = MREF(entry.header().mft_reference())
+                if ref == INODE_ROOT and entry.filename_information().filename() == ".":
+                    continue
+                ret.append(self._enumerator.get_record(ref))
 
         return ret
 
@@ -398,9 +434,12 @@ def main():
         v = FlatVolume(buf, int(sys.argv[2]))
         fs = NTFSFilesystem(v)
         root = fs.get_root_directory()
-        g_logger.debug("root dir: %s", root)
+        g_logger.info("root dir: %s", root)
         for c in root.get_children():
-            g_logger.debug("  - %s", c.get_name())
+            g_logger.info("  - %s", c.get_name())
+
+        sys32 = root.get_path_entry("windows\\system32")
+        g_logger.info("sys32: %s", sys32)
 
 
 

@@ -448,9 +448,9 @@ class IndexRecordHeader(FixupBlock):
                                self)
 
 
-class INDEX_ALLOCATION(FixupBlock):
+class INDEX_BLOCK(FixupBlock):
     def __init__(self, buf, offset, parent=None):
-        super(INDEX_ALLOCATION, self).__init__(buf, offset, parent)
+        super(INDEX_BLOCK, self).__init__(buf, offset, parent)
         self.declare_field("dword", "magic", 0x0)
         self.declare_field("word",  "usa_offset")
         self.declare_field("word",  "usa_count")
@@ -469,7 +469,36 @@ class INDEX_ALLOCATION(FixupBlock):
         return 0x30 + INDEX.structure_size(buf, offset + 0x10, parent)
 
     def __len__(self):
-        return 0x30 + len(self.index())
+        return 0x1000
+
+
+class INDEX_ALLOCATION(FixupBlock):
+    def __init__(self, buf, offset, parent=None):
+        super(INDEX_ALLOCATION, self).__init__(buf, offset, parent)
+        self.add_explicit_field(0, INDEX_BLOCK, "blocks")
+
+    @staticmethod
+    def guess_num_blocks(buf, offset):
+        count = 0
+        BLOCK_SIZE = 0x1000
+        try:
+            while BinaryParser.read_dword(buf, offset) == 0x58444e49:  # "INDX"
+                offset += BLOCK_SIZE
+                count += 1
+        except IndexError:
+            return count
+        return count
+
+    def blocks(self):
+        for i in xrange(INDEX_ALLOCATION.guess_num_blocks(self._buf, self.offset())):
+            yield INDEX_BLOCK(self._buf, self._offset + 0x1000 * i)
+
+    @staticmethod
+    def structure_size(buf, offset, parent):
+        return 0x1000 * INDEX_ALLOCATION.guess_num_blocks(buf, offset)
+
+    def __len__(self):
+        return 0x1000 * INDEX_ALLOCATION.guess_num_blocks(self._buf, self._offset)
 
 
 class IndexEntry(Block):
