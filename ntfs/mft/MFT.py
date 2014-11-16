@@ -290,7 +290,8 @@ class INDEX(Block, Nestable):
         self.add_explicit_field(self.header().entries_offset(),
                                 INDEX_ENTRY, "entries")
         slack_start = self.header().entries_offset() + self.header().index_length()
-        self.add_explicit_field(slack_start, INDEX_ENTRY, "slack_entries")
+        # TODO: reenable
+        #self.add_explicit_field(slack_start, INDEX_ENTRY, "slack_entries")
 
     @staticmethod
     def structure_size(buf, offset, parent):
@@ -305,14 +306,11 @@ class INDEX(Block, Nestable):
         """
         offset = self.header().entries_offset()
         if offset == 0:
-            logging.debug("No entries in this allocation block.")
             return
         while offset <= self.header().index_length() - 0x52:
-            logging.debug("Entry has another entry after it.")
             e = self._INDEX_ENTRY(self._buf, self.offset() + offset, self)
-            offset += e.length()
+            offset += len(e)
             yield e
-        logging.debug("No more entries.")
 
     def slack_entries(self):
         """
@@ -321,13 +319,13 @@ class INDEX(Block, Nestable):
         """
         offset = self.header().index_length()
         try:
-            while offset <= self.header().allocated_size - 0x52:
+            while offset <= self.header().allocated_size() - 0x52:
                 try:
                     logging.debug("Trying to find slack entry at %s.", hex(offset))
                     e = self._INDEX_ENTRY(self._buf, offset, self)
                     if e.is_valid():
                         logging.debug("Slack entry is valid.")
-                        offset += e.length() or 1
+                        offset += len(e) or 1
                         yield e
                     else:
                         logging.debug("Slack entry is invalid.")
@@ -341,8 +339,8 @@ class INDEX(Block, Nestable):
             pass
 
 
-def INDEX_ROOT(Block, Nestable):
-    def __init__(self, buf, offset, parent):
+class INDEX_ROOT(Block, Nestable):
+    def __init__(self, buf, offset, parent=None):
         super(INDEX_ROOT, self).__init__(buf, offset)
         self.declare_field("dword", "type", 0x0)
         self.declare_field("dword", "collation_rule")
@@ -355,7 +353,7 @@ def INDEX_ROOT(Block, Nestable):
         self.add_explicit_field(self._index_offset, INDEX, "index")
 
     def index(self):
-        return INDEX(self._buf, self.offset(self._index_offset),
+        return INDEX(self._buf, self._offset + self._index_offset,
                      self, MFT_INDEX_ENTRY)
 
     @staticmethod
@@ -451,12 +449,7 @@ class IndexRecordHeader(FixupBlock):
 
 
 class INDEX_ALLOCATION(FixupBlock):
-    def __init__(self, buf, offset, parent):
-        """
-
-        TODO(wb): figure out what we're doing with the fixups!
-
-        """
+    def __init__(self, buf, offset, parent=None):
         super(INDEX_ALLOCATION, self).__init__(buf, offset, parent)
         self.declare_field("dword", "magic", 0x0)
         self.declare_field("word",  "usa_offset")
@@ -465,13 +458,10 @@ class INDEX_ALLOCATION(FixupBlock):
         self.declare_field("qword", "vcn")
         self._index_offset = self.current_field_offset()
         self.add_explicit_field(self._index_offset, INDEX, "index")
-        # TODO(wb): we do not want to modify data here.
-        #   best to make a copy and use that.
-        #   Until then, this is not a nestable structure.
         self.fixup(self.usa_count(), self.usa_offset())
 
     def index(self):
-        return INDEX(self._buf, self.offset(self._index_offset),
+        return INDEX(self._buf, self._offset + self._index_offset,
                      self, MFT_INDEX_ENTRY)
 
     @staticmethod
@@ -480,7 +470,6 @@ class INDEX_ALLOCATION(FixupBlock):
 
     def __len__(self):
         return 0x30 + len(self.index())
-
 
 
 class IndexEntry(Block):
@@ -826,6 +815,9 @@ class Attribute(Block, Nestable):
     def __len__(self):
         return self.size()
 
+    def __str__(self):
+        return "%s" % (Attribute.TYPES[self.type()])
+
     def runlist(self):
         return Runlist(self._buf, self.offset() + self.runlist_offset(), self)
 
@@ -856,10 +848,11 @@ def MSEQNO(mft_reference):
     return (mft_reference >> 48) & 0xFFFF
 
 
+class AttributeNotFoundError(Exception):
+    pass
+
+
 class MFTRecord(FixupBlock):
-    """
-    Implementation note: cannot be nestable due to fixups.
-    """
     def __init__(self, buf, offset, parent, inode=None):
         super(MFTRecord, self).__init__(buf, offset, parent)
 
@@ -895,6 +888,7 @@ class MFTRecord(FixupBlock):
         for a in self.attributes():
             if a.type() == attr_type:
                 return a
+        raise AttributeNotFoundError()
 
     def is_directory(self):
         return self.flags() & MFT_RECORD_FLAGS.MFT_RECORD_IS_DIRECTORY

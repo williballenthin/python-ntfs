@@ -3,9 +3,14 @@ import logging
 
 from ntfs.BinaryParser import hex_dump
 from ntfs.BinaryParser import Block
+from ntfs.mft.MFT import MREF
+from ntfs.mft.MFT import MSEQNO
 from ntfs.mft.MFT import MFTRecord
-from ntfs.mft.MFT import MFT_RECORD_SIZE
+from ntfs.mft.MFT import ATTR_TYPE
+from ntfs.mft.MFT import INDEX_ROOT
 from ntfs.mft.MFT import MFTEnumerator
+from ntfs.mft.MFT import MFT_RECORD_SIZE
+from ntfs.mft.MFT import INDEX_ALLOCATION
 
 
 g_logger = logging.getLogger("ntfs.filesystem")
@@ -42,8 +47,21 @@ class File(object):
         raise NotImplementedError()
 
 
-class NTFSFile(File):
+class NTFSFileMetadataMixin(object):
+    def __init__(self, record):
+        self._record = record
+
+    def get_si_birth_timestamp(self):
+        pass
+
+    # etc
+
+
+
+class NTFSFile(File, NTFSFileMetadataMixin):
     def __init__(self, filesystem, mft_record):
+        File.__init__(self)
+        NTFSFileMetadataMixin.__init__(self, mft_record)
         self._fs = filesystem
         self._record = mft_record
 
@@ -52,6 +70,9 @@ class NTFSFile(File):
 
     def get_parent_directory(self):
         return self._fs.get_record_parent(self._record)
+
+    def __str__(self):
+        return "File(name: %s)" % (self.get_name())
 
 
 class ChildNotFoundError(Exception):
@@ -84,14 +105,17 @@ class Directory(object):
         """
         @raise ChildNotFoundError: if the given filename is not found.
         """
+        name_lower = name.lower()
         for child in self.get_children():
-            if name == child.get_name():
+            if name_lower == child.get_name().lower():
                 return child
         raise ChildNotFoundError()
 
 
-class NTFSDirectory(Directory):
+class NTFSDirectory(Directory, NTFSFileMetadataMixin):
     def __init__(self, filesystem, mft_record):
+        Directory.__init__(self)
+        NTFSFileMetadataMixin.__init__(self, mft_record)
         self._fs = filesystem
         self._record = mft_record
 
@@ -118,6 +142,8 @@ class NTFSDirectory(Directory):
     def get_parent_directory(self):
         return self._fs.get_record_parent(self._record)
 
+    def __str__(self):
+        return "Directory(name: %s)" % (self.get_name())
 
 
 class Filesystem(object):
@@ -304,6 +330,7 @@ class NTFSFilesystem(object):
             return NonResidentAttributeData(self._clusters, attribute.runlist())
 
     def get_mft_buffer(self):
+        g_logger.debug("mft: %s", hex(self._vbr.mft_lcn()))
         mft_chunk = self._clusters[self._vbr.mft_lcn()]
         mft_mft_record = MFTRecord(mft_chunk, 0, None)
         mft_data_attribute = mft_mft_record.data_attribute()
@@ -336,8 +363,28 @@ class NTFSFilesystem(object):
 
         return NTFSDirectory(self, parent_record)
 
-    def get_record_children(self, mft_record):
-        return []
+    def get_record_children(self, record):
+        ret = []
+        if not record.is_directory():
+            return ret
+
+        try:
+            indx_alloc_attr = record.attribute(ATTR_TYPE.INDEX_ALLOCATION)
+            indx_alloc = INDEX_ALLOCATION(self.get_attribute_data(indx_alloc_attr), 0)
+            indx = indx_alloc
+            # TODO: i'm not sure we're parsing all blocks here
+        except AttributeNotFoundError:
+            indx_root_attr = record.attribute(ATTR_TYPE.INDEX_ROOT)
+            indx_root = INDEX_ROOT(self.get_attribute_data(indx_root_attr), 0)
+            indx = indx_root
+
+        for entry in indx.index().entries():
+            ref = MREF(entry.header().mft_reference())
+            if ref == INODE_ROOT and entry.filename_information().filename() == ".":
+                continue
+            ret.append(self._enumerator.get_record(ref))
+
+        return ret
 
 
 def main():
@@ -350,12 +397,11 @@ def main():
     with Mmap(sys.argv[1]) as buf:
         v = FlatVolume(buf, int(sys.argv[2]))
         fs = NTFSFilesystem(v)
-        # note optimization: copy entire mft buffer from NonResidentNTFSAttribute
-        #  to avoid getslice lookups
-        mft_data = fs.get_mft_buffer()[:]
-        enum = MFTEnumerator(mft_data)
-        for record, path in enum.enumerate_paths():
-            g_logger.debug("%s", path)
+        root = fs.get_root_directory()
+        g_logger.debug("root dir: %s", root)
+        for c in root.get_children():
+            g_logger.debug("  - %s", c.get_name())
+
 
 
 if __name__ == "__main__":
