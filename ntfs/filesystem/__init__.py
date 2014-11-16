@@ -5,15 +5,56 @@ from ntfs.BinaryParser import hex_dump
 from ntfs.BinaryParser import Block
 from ntfs.mft.MFT import MFTRecord
 from ntfs.mft.MFT import MFT_RECORD_SIZE
+from ntfs.mft.MFT import MFTEnumerator
 
 
 g_logger = logging.getLogger("ntfs.filesystem")
+
+
+class FileSystemError(Exception):
+    def __init__(self, msg="no details"):
+        super(FileSystemError, self).__init__(self)
+        self._msg = msg
+
+    def __str__(self):
+        return "%s(%s)" % (self.__class__.__name__, self._msg)
+
+
+class CorruptNTFSFilesystemError(FileSystemError):
+    pass
+
+
+class NoParentError(FileSystemError):
+    pass
 
 
 class File(object):
     """
     interface
     """
+    def get_name(self):
+        raise NotImplementedError()
+
+    def get_parent_directory(self):
+        """
+        @raise NoParentError:
+        """
+        raise NotImplementedError()
+
+
+class NTFSFile(File):
+    def __init__(self, filesystem, mft_record):
+        self._fs = filesystem
+        self._record = mft_record
+
+    def get_name(self):
+        return self._record.filename_information().filename()
+
+    def get_parent_directory(self):
+        return self._fs.get_record_parent(self._record)
+
+
+class ChildNotFoundError(Exception):
     pass
 
 
@@ -21,14 +62,70 @@ class Directory(object):
     """
     interface
     """
-    pass
+    def get_name(self):
+        raise NotImplementedError()
+
+    def get_children(self):
+        raise NotImplementedError()
+
+    def get_files(self):
+        raise NotImplementedError()
+
+    def get_directories(self):
+        raise NotImplementedError()
+
+    def get_parent_directory(self):
+        """
+        @raise NoParentError:
+        """
+        raise NotImplementedError()
+
+    def get_child(self, name):
+        """
+        @raise ChildNotFoundError: if the given filename is not found.
+        """
+        for child in self.get_children():
+            if name == child.get_name():
+                return child
+        raise ChildNotFoundError()
+
+
+class NTFSDirectory(Directory):
+    def __init__(self, filesystem, mft_record):
+        self._fs = filesystem
+        self._record = mft_record
+
+    def get_name(self):
+        return self._record.filename_information().filename()
+
+    def get_children(self):
+        ret = []
+        for child in self._fs.get_record_children(self._record):
+            if child.is_directory():
+                ret.append(NTFSDirectory(self._fs, child))
+            else:
+                ret.append(NTFSFile(self._fs, child))
+        return ret
+
+    def get_files(self):
+        return filter(lambda c: isinstance(c, NTFSFile),
+                      self.get_children())
+
+    def get_directories(self):
+        return filter(lambda c: isinstance(c, NTFSDirectory),
+                      self.get_children())
+
+    def get_parent_directory(self):
+        return self._fs.get_record_parent(self._record)
+
 
 
 class Filesystem(object):
     """
     interface
     """
-    pass
+    def get_root_directory(self):
+        raise NotImplementedError()
 
 
 class NTFSVBR(Block):
@@ -84,25 +181,16 @@ class ClusterAccessor(object):
 
 INODE_MFT = 0
 INODE_MFTMIRR = 1
-
-
-class CorruptNTFSFilesystemError(Exception):
-    def __init__(self, msg="no details"):
-        super(CorruptNTFSFilesystemError, self).__init__(self)
-        self._msg = msg
-
-    def __str__(self):
-        return "%s(%s)" % (self.__class__.__name__, self._msg)
-
-
-class MFTDataIsResidentError(CorruptNTFSFilesystemError):
-    pass
+INODE_ROOT = 5
 
 
 class NonResidentAttributeData(object):
     """
     expose a potentially non-continuous set of data runs as a single
       logical buffer
+
+    once constructed, use this like a bytestring.
+    you can unpack from it, slice it, etc.
 
     implementation note: this is likely a good place to optimize
     """
@@ -113,11 +201,17 @@ class NonResidentAttributeData(object):
         self._runentries = [(a, b) for a, b in self._runlist.runs()]
 
     def __getitem__(self, index):
+        # TODO: clarify variable names and their units
+        # units: bytes
         current_run_start_offset = 0
+
+        # units: clusters
         for cluster_offset, num_clusters in self._runentries:
+            # units: bytes
             run_length = num_clusters * self._clusters.get_cluster_size()
 
             if current_run_start_offset <= index < current_run_start_offset + run_length:
+                # units: bytes
                 i = index - current_run_start_offset
                 cluster = self._clusters[cluster_offset]
                 return cluster[i]
@@ -130,6 +224,7 @@ class NonResidentAttributeData(object):
         """
         TODO: there are some pretty bad inefficiencies here, i believe
         """
+        # TODO: clarify variable names and their units
         ret = []
         current_run_start_offset = 0
         have_found_start = False
@@ -186,20 +281,63 @@ class NTFSFilesystem(object):
         if cluster_size is not None:
             self._cluster_size = cluster_size
         else:
-            self._cluster_size = self._vbr.bytes_per_sector() * self._vbr.sectors_per_cluster()
+            self._cluster_size = self._vbr.bytes_per_sector() * \
+                                   self._vbr.sectors_per_cluster()
 
         self._clusters = ClusterAccessor(self._volume, self._cluster_size)
         self._logger = logging.getLogger("NTFSFilesystem")
 
-    def get_mft_buf(self):
+        # balance memory usage with performance
+        b = self.get_mft_buffer()[:]
+        if len(b) > 1024 * 1024 * 500:
+            self._mft_data = b
+        else:
+            # note optimization: copy entire mft buffer from NonResidentNTFSAttribute
+            #  to avoid getslice lookups
+            self._mft_data = b[:]
+        self._enumerator = MFTEnumerator(self._mft_data)
+
+    def get_attribute_data(self, attribute):
+        if attribute.non_resident() == 0:
+            return attribute.value()
+        else:
+            return NonResidentAttributeData(self._clusters, attribute.runlist())
+
+    def get_mft_buffer(self):
         mft_chunk = self._clusters[self._vbr.mft_lcn()]
         mft_mft_record = MFTRecord(mft_chunk, 0, None)
         mft_data_attribute = mft_mft_record.data_attribute()
-        if mft_data_attribute.non_resident() == 0:
-            raise MFTDataIsResidentError()
+        return self.get_attribute_data(mft_data_attribute)
 
-        mft_data = NonResidentAttributeData(self._clusters, mft_data_attribute.runlist())
-        return mft_data
+    def get_root_directory(self):
+        return NTFSDirectory(self, self._enumerator.get_record(INODE_ROOT))
+
+    def get_record_parent(self, record):
+        """
+        @raises NoParentError: on various error conditions
+        """
+        if record.mft_record_number() == 5:
+            raise NoParentError("Root directory has no parent")
+
+        fn = record.filename_information()
+        if not fn:
+            raise NoParentError("File has no filename attribute")
+
+        parent_record_num = MREF(fn.mft_parent_reference())
+        parent_seq_num = MSEQNO(fn.mft_parent_reference())
+
+        try:
+            parent_record = self._enumerator.get_record(parent_record_num)
+        except (BinaryParser.OverrunBufferException, InvalidRecordException):
+            raise NoParentError("Invalid parent MFT record")
+
+        if parent_record.sequence_number() != parent_seq_num:
+            raise NoParentError("Invalid parent MFT record (bad sequence number)")
+
+        return NTFSDirectory(self, parent_record)
+
+    def get_record_children(self, mft_record):
+        return []
 
 
 def main():
@@ -214,13 +352,10 @@ def main():
         fs = NTFSFilesystem(v)
         # note optimization: copy entire mft buffer from NonResidentNTFSAttribute
         #  to avoid getslice lookups
-        mft_data = fs.get_mft_buf()[:]
+        mft_data = fs.get_mft_buffer()[:]
         enum = MFTEnumerator(mft_data)
         for record, path in enum.enumerate_paths():
-            print(path)
             g_logger.debug("%s", path)
-
-
 
 
 if __name__ == "__main__":

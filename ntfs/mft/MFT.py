@@ -1024,7 +1024,7 @@ CYCLE_ENTRY = "<CYCLE>"
 
 class MFTEnumerator(object):
     def __init__(self, buf, record_cache=None, path_cache=None):
-        DEFAULT_CACHE_SIZE = 1024
+        DEFAULT_CACHE_SIZE = 102400
         if record_cache is None:
             record_cache = Cache(size_limit=DEFAULT_CACHE_SIZE)
         if path_cache is None:
@@ -1075,11 +1075,11 @@ class MFTEnumerator(object):
                 record = self.get_record(index)
                 yield record
                 index += 1
-            except BinaryParser.OverrunBufferException:
-                return
             except InvalidRecordException:
                 index += 1
                 continue
+            except BinaryParser.OverrunBufferException:
+                return
 
     def enumerate_paths(self):
         for record in self.enumerate_records():
