@@ -1,5 +1,5 @@
 """
-Dump the directory index for a directory.
+Clone of INDXParse.py that processes an entire file system.
 """
 import logging
 
@@ -135,12 +135,14 @@ def safe_date(f):
 def csv_directory_index_formatter(e):
     entry = e["entry"].filename_information()
     fn = entry.filename()
-    if e["active"]:
-        f = u"active,{path},{filename},{physical_size},{logical_size},{mtime},{atime},{ctime},{crtime}"
+    f = u"{status},{path},{filename},{physical_size},{logical_size},{mtime},{atime},{ctime},{crtime}"
+    if e["active"] == True:
+        status = "active"
     else:
-        f = u"slack,{path},{filename},{physical_size},{logical_size},{mtime},{atime},{ctime},{crtime}"
+        status = "slack"
 
     return f.format(
+        status=status,
         path=e["path"],
         filename=entry.filename(),
         physical_size=entry.physical_size(),
@@ -152,6 +154,7 @@ def csv_directory_index_formatter(e):
 
 
 def bodyfile_directory_index_formatter(e):
+    # TODO
     pass
 
 
@@ -170,7 +173,7 @@ def main(image_filename, volume_offset, path):
             entry = root.get_path_entry(path)
 
         v = make_dump_directory_indices_visitor(csv_directory_index_formatter)
-        v(fs, entry)
+        walk_directories(fs, entry, v)
 
 if __name__ == '__main__':
     import sys
