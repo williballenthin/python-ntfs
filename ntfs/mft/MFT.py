@@ -321,18 +321,18 @@ class INDEX(Block, Nestable):
         try:
             while offset <= self.header().allocated_size() - 0x52:
                 try:
-                    logging.debug("Trying to find slack entry at %s.", hex(offset))
+                    g_logger.debug("Trying to find slack entry at %s.", hex(offset))
                     e = self._INDEX_ENTRY(self._buf, offset, self)
                     if e.is_valid():
-                        logging.debug("Slack entry is valid.")
+                        g_logger.debug("Slack entry is valid.")
                         offset += len(e) or 1
                         yield e
                     else:
-                        logging.debug("Slack entry is invalid.")
+                        g_logger.debug("Slack entry is invalid.")
                         # TODO(wb): raise a custom exception
                         raise BinaryParser.ParseException("Not a deleted entry")
                 except BinaryParser.ParseException:
-                    logging.debug("Scanning one byte forward.")
+                    g_logger.debug("Scanning one byte forward.")
                     offset += 1
         except struct.error:
             logging.debug("Slack entry parsing overran buffer.")
@@ -1132,14 +1132,22 @@ class MFTEnumerator(object):
         """
         @type record: MFTRecord
         @rtype: str
-        @return: A string containing the path of the given record. It will begin with the first
-          path component, that is, something like "Documents and Settings\Adminstrator\bad.exe".
-          In the event that a path component cannot be determined, it is replaced by "??".
-          If the parent of an entry cannot be verified, then it is added to the $ORPHAN directory.
-          If a cycle is detected during the path resolution, then the offending entry is
-            replaced with <CYCLE>. This occastionally happens at the root directory.
+        @return: A string containing the path of the given record.
+          It will begin with the first path component, that is,
+          something like "Documents and Settings\Adminstrator\bad.exe".
+          In the event that a path component cannot be determined, it is
+          replaced by "??". If the parent of an entry cannot be verified,
+          then it is added to the $ORPHAN directory. If a cycle is detected
+          during the path resolution, then the offending entry is
+          replaced with <CYCLE>. This occastionally happens at the root
+          directory.
         """
-        return self._get_path_impl(record, set())
+        r = self._get_path_impl(record, set())
+        if r == "":
+            return FILE_SEP
+        else:
+            return r
+
 
     def _get_path_impl(self, record, cycledetector):
         """
