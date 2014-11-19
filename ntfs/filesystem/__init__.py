@@ -54,6 +54,9 @@ class File(object):
     def read(self, offset, length):
         raise NotImplementedError()
 
+    def get_full_path(self):
+        raise NotImplementedError()
+
 
 class NTFSFileMetadataMixin(object):
     def __init__(self, record):
@@ -131,6 +134,9 @@ class NTFSFile(File, NTFSFileMetadataMixin):
         data = self._fs.get_attribute_data(data_attribute)
         return data[offset:offset+length]
 
+    def get_full_path(self):
+        return self._fs.get_record_path(self._record)
+
 
 class ChildNotFoundError(Exception):
     pass
@@ -163,6 +169,10 @@ class Directory(object):
         @raise ChildNotFoundError: if the given filename is not found.
         """
         raise NotImplementedError()
+
+    def get_full_path(self):
+        raise NotImplementedError()
+
 
 class PathDoesNotExistError(Exception):
     pass
@@ -257,6 +267,9 @@ class NTFSDirectory(Directory, NTFSFileMetadataMixin):
                 raise DirectoryDoesNotExistError()
 
             return child.get_path_entry(rest)
+
+    def get_full_path(self):
+        return self._fs.get_record_path(self._record)
 
 
 class Filesystem(object):
@@ -450,6 +463,9 @@ class NTFSFilesystem(object):
 
     def get_root_directory(self):
         return NTFSDirectory(self, self._enumerator.get_record(INODE_ROOT))
+
+    def get_record_path(self, record):
+        return self._enumerator.get_path(record)
 
     def get_record_parent(self, record):
         """
