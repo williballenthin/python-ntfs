@@ -3,6 +3,7 @@ import logging
 
 from ntfs.BinaryParser import hex_dump
 from ntfs.BinaryParser import Block
+from ntfs.BinaryParser import OverrunBufferException
 from ntfs.mft.MFT import MREF
 from ntfs.mft.MFT import MSEQNO
 from ntfs.mft.MFT import MFTRecord
@@ -333,7 +334,21 @@ class ClusterAccessor(object):
 
 INODE_MFT = 0
 INODE_MFTMIRR = 1
+INODE_LOGFILE = 2
+INODE_VOLUME = 3
+INODE_ATTR_DEF = 4
 INODE_ROOT = 5
+INODE_BITMAP = 6
+INODE_BOOT = 7
+INODE_BADCLUS = 8
+INODE_SECURE = 9
+INODE_UPCASE = 10
+INODE_EXTEND = 11
+INODE_RESERVED0 = 12
+INODE_RESERVED1 = 13
+INODE_RESERVED2 = 14
+INODE_RESERVED3 = 15
+INODE_FIRST_USER = 16
 
 
 class NonResidentAttributeData(object):
@@ -351,11 +366,15 @@ class NonResidentAttributeData(object):
         self._clusters = clusters
         self._runlist = runlist
         self._runentries = [(a, b) for a, b in self._runlist.runs()]
+        self._len = None
 
     def __getitem__(self, index):
         # TODO: clarify variable names and their units
         # units: bytes
         current_run_start_offset = 0
+
+        if index < 0:
+            index = len(self) + index
 
         # units: clusters
         for cluster_offset, num_clusters in self._runentries:
@@ -381,14 +400,25 @@ class NonResidentAttributeData(object):
         current_run_start_offset = 0
         have_found_start = False
 
+        g_logger.debug("NonResidentAttributeData: getslice: start: %s end: %s", hex(start), hex(end))
+
         if end == sys.maxint:
             end = len(self)
+
+        if end < 0:
+            end = len(self) + end
+
+        if start < 0:
+            start = len(self) + start
 
         if max(start, end) > len(self):
              raise IndexError("(%d, %d) is greater than the non resident attribute data length %s" %
                 (start, end, len(self)))
 
         for cluster_offset, num_clusters in self._runentries:
+            g_logger.debug("NonResidentAttributeData: getslice: runentry: start: %s len: %s",
+                    hex(cluster_offset * self._clusters.get_cluster_size()),
+                    hex(num_clusters * self._clusters.get_cluster_size()))
             run_length = num_clusters * self._clusters.get_cluster_size()
 
             if not have_found_start:
@@ -418,9 +448,13 @@ class NonResidentAttributeData(object):
         return "".join(ret)
 
     def __len__(self):
+        if self._len is not None:
+            return self._len
         ret = 0
-        for _, num_clusters in self._runentries:
+        for cluster_start, num_clusters in self._runentries:
+            g_logger.debug("NonResidentAttributeData: len: run: cluster: %s len: %s", hex(cluster_start), hex(num_clusters))
             ret += num_clusters * self._clusters.get_cluster_size()
+        self._len = ret
         return ret
 
 
@@ -440,7 +474,24 @@ class NTFSFilesystem(object):
         self._logger = logging.getLogger("NTFSFilesystem")
 
         # balance memory usage with performance
-        b = self.get_mft_buffer()[:]
+        try:
+            b = self.get_mft_buffer()
+
+            # test we can access last MFT byte, demonstrating we can
+            #   reach all runs
+            _ = b[-1]
+        except OverrunBufferException as e:
+            g_logger.warning("failed to read MFT from image, will fall back to MFTMirr: %s", e)
+            try:
+                b = self.get_mftmirr_buffer()
+
+                # test we can access last MFTMirr byte, demonstrating
+                #   we can reach all runs
+                _ = b[-1]
+            except OverrunBufferException as e:
+                g_logger.error("failed to read MFTMirr from image: %s", e)
+                raise CorruptNTFSFilesystemError("failed to read MFT or MFTMirr from image")
+
         if len(b) > 1024 * 1024 * 500:
             self._mft_data = b
         else:
@@ -449,6 +500,14 @@ class NTFSFilesystem(object):
             self._mft_data = b[:]
         self._enumerator = MFTEnumerator(self._mft_data)
 
+        # test there's at least some user content (aside from root), or we'll
+        #   assume something's up
+        try:
+            _ = self.get_record(INODE_FIRST_USER)
+        except OverrunBufferException:
+            g_logger.error("overrun reading first user MFT record")
+            raise CorruptNTFSFilesystemError("failed to read first user record (MFT not large enough)")
+
     def get_attribute_data(self, attribute):
         if attribute.non_resident() == 0:
             return attribute.value()
@@ -456,13 +515,25 @@ class NTFSFilesystem(object):
             return NonResidentAttributeData(self._clusters, attribute.runlist())
 
     def get_mft_buffer(self):
+        g_logger.debug("mft: %s", hex(self._vbr.mft_lcn() * 4096))
         mft_chunk = self._clusters[self._vbr.mft_lcn()]
-        mft_mft_record = MFTRecord(mft_chunk, 0, None)
+        mft_mft_record = MFTRecord(mft_chunk, 0, None, inode=INODE_MFT)
         mft_data_attribute = mft_mft_record.data_attribute()
         return self.get_attribute_data(mft_data_attribute)
 
+    def get_mftmirr_buffer(self):
+        g_logger.debug("mft mirr: %s", hex(self._vbr.mftmirr_lcn() * 4096))
+        mftmirr_chunk = self._clusters[self._vbr.mftmirr_lcn()]
+        mftmirr_mft_record = MFTRecord(mftmirr_chunk, INODE_MFTMIRR * MFT_RECORD_SIZE, None, inode=INODE_MFTMIRR)
+        mftmirr_data_attribute = mftmirr_mft_record.data_attribute()
+        return self.get_attribute_data(mftmirr_data_attribute)
+
     def get_root_directory(self):
         return NTFSDirectory(self, self._enumerator.get_record(INODE_ROOT))
+
+    def get_record(self, record_number):
+        g_logger.debug("get_record: %d", record_number)
+        return self._enumerator.get_record(record_number)
 
     def get_record_path(self, record):
         return self._enumerator.get_path(record)

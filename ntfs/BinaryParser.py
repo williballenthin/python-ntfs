@@ -609,10 +609,13 @@ class Block(object):
                          field["name"])
                     ret += v.get_all_string(indent + 1)
             elif isinstance(v, types.GeneratorType):
-                ret += "%s%s (%s *)%s\n" % ("  " * indent, hex(field["offset"]), field["type"], field["name"],)
+                ret += "%s%s (%s[])%s\n" % ("  " * indent, hex(field["offset"]), field["type"], field["name"],)
                 for i, j in enumerate(v):
-                    ret += "%s[%d] (%s)\n" % ("  " * (indent + 1), i, field["type"])
-                    ret += j.get_all_string(indent + 2)
+                    ret += "%s[%d] (%s) " % ("  " * (indent + 1), i, field["type"])
+                    if hasattr(j, "get_all_string"):
+                        ret += "\n" + j.get_all_string(indent + 2)
+                    else:
+                        ret += str(j) + "\n"
             else:
                 if isinstance(v, int):
                     v = hex(v)

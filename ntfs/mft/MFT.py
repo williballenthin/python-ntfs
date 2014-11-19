@@ -1085,6 +1085,7 @@ class MFTEnumerator(object):
         """
         start = record_num * MFT_RECORD_SIZE
         end = start + MFT_RECORD_SIZE
+        g_logger.debug("get_record_buf: start: %s len: %s bufsize: %s", hex(start), hex(end - start), hex(len(self._buf)))
         if end > len(self._buf):
             raise BinaryParser.OverrunBufferException(end, len(self._buf))
 
