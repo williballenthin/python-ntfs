@@ -26,7 +26,7 @@ def get_directory_index_active_entries(fs, directory):
     INDEX_ROOT and INDEX_ALLOCATION attributes
     """
     if not directory.is_directory():
-        raise InvalidArgumentError()
+        raise InvalidArgumentErro()
 
     # sorry, reaching
     record = directory._record
@@ -100,15 +100,21 @@ def make_dump_directory_indices_visitor(formatter):
     """
     def dump_directory_indices_visitor(fs, directory):
         for e in get_directory_index_active_entries(fs, directory):
-            print(formatter({
-                "active": True,
-                "path": directory.get_full_path(),
-                "entry": e}))
+            try:
+                print(formatter({
+                    "active": True,
+                    "path": directory.get_full_path(),
+                    "entry": e}))
+            except Exception as e:
+                g_logger.warning("Failed to output entry: %s", e)
         for e in get_directory_index_inactive_entries(fs, directory):
-            print(formatter({
-                "active": False,
-                "path": directory.get_full_path(),
-                "entry": e}))
+            try:
+                print(formatter({
+                    "active": False,
+                    "path": directory.get_full_path(),
+                    "entry": e}))
+            except Exception as e:
+                g_logger.warning("Failed to output entry: %s", e)
     return dump_directory_indices_visitor
 
 

@@ -18,7 +18,7 @@ g_logger = logging.getLogger("ntfs.examples.inspect_directory")
 
 def main(image_filename, volume_offset, path):
     logging.basicConfig(level=logging.DEBUG)
-    logging.getLogger("ntfs.mft").setLevel(logging.INFO)
+    #logging.getLogger("ntfs.mft").setLevel(logging.INFO)
 
     with Mmap(image_filename) as buf:
         v = FlatVolume(buf, volume_offset)
