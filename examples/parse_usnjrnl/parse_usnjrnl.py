@@ -1,5 +1,5 @@
 """
-Dump stuff related to a single record.
+Parse a UsnJrnl:$J object into a CSV file.
 
 inspired by parser-usnjrnl by Seth Nazarro (http://code.google.com/p/parser-usnjrnl/)
 """
