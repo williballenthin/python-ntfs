@@ -12,7 +12,7 @@ class Volume(Block):
     __unpackable__ = True
     def __init__(self, buf, offset, sector_size=512):
         super(Volume, self).__init__(buf, offset)
-        self._sector_size = 512
+        self._sector_size = sector_size
 
     def __getitem__(self, index):
         return self._buf[index + self._offset]
