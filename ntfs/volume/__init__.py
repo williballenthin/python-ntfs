@@ -29,7 +29,7 @@ class FlatVolume(Volume):
     A volume found in a physically contiguous run of bytes.
     """
     def __init__(self, buf, offset, sector_size=512):
-        super(FlatVolume, self).__init__(buf, offset)
+        super(FlatVolume, self).__init__(buf, offset, sector_size=sector_size)
 
 
 def main():
