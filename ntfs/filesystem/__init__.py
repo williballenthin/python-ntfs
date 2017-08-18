@@ -1,9 +1,9 @@
 import sys
 import logging
 
-from ntfs.BinaryParser import hex_dump
 from ntfs.BinaryParser import Block
 from ntfs.BinaryParser import OverrunBufferException
+from ntfs.mft.MFT import InvalidRecordException
 from ntfs.mft.MFT import MREF
 from ntfs.mft.MFT import MSEQNO
 from ntfs.mft.MFT import MFTRecord
@@ -284,29 +284,60 @@ class Filesystem(object):
 class NTFSVBR(Block):
     def __init__(self, volume):
         super(NTFSVBR, self).__init__(volume, 0)
+        # 0x0
         self.declare_field("byte", "jump", offset=0x0, count=3)
+        # 0x3 OEM ID
         self.declare_field("qword", "oem_id")
+
+        # The BIOS parameter block (BPB)
+        # 0x0b Bytes Per Sector
         self.declare_field("word", "bytes_per_sector")
+        # 0x0d Sectors Per Cluster. The number of sectors in a cluster
         self.declare_field("byte", "sectors_per_cluster")
+        # Must be 0
+        # 0x0e
         self.declare_field("word", "reserved_sectors")
+        # 0x10
         self.declare_field("byte", "zero0", count=3)
+        # 0x13
         self.declare_field("word", "unused0")
+        # 0x15 Media Descriptor. Legacy
         self.declare_field("byte", "media_descriptor")
+        # 0x16
         self.declare_field("word", "zero1")
+        # 0x18
         self.declare_field("word", "sectors_per_track")
+        # 0x1a
         self.declare_field("word", "number_of_heads")
+        # 0x1c
         self.declare_field("dword", "hidden_sectors")
+        # 0x20 Unused
         self.declare_field("dword", "unused1")
+
+        # 0x24 Extended BPB
         self.declare_field("dword", "unused2")
+        # 0x28 Total Sectors. The total number of sectors on the hard disk
         self.declare_field("qword", "total_sectors")
+        # 0x30 Logical Cluster Number for the File $MFT
         self.declare_field("qword", "mft_lcn")
+        # 0x38 Logical Cluster Number for the File $MFTMirr
         self.declare_field("qword", "mftmirr_lcn")
-        self.declare_field("dword", "clusters_per_file_record_segment")
-        self.declare_field("byte", "clusters_per_index_buffer")
+        # 0x40 Cluster Per MFT Record
+        self.declare_field("byte", "clusters_per_file_record_segment")
+        # 0x41 Unused
         self.declare_field("byte", "unused3", count=3)
+        # 0x44 Cluster Per Index Buffer.`
+        self.declare_field("byte", "clusters_per_index_buffer")
+        # 0x45 Unused
+        self.declare_field("byte", "unused4", count=3)
+        # 0x48 Volume Serial Number
         self.declare_field("qword", "volume_serial_number")
+        # 0x50 Checksum. Not used by NTFS.
         self.declare_field("dword", "checksum")
+
+        # 0x54 Bootstrap code
         self.declare_field("byte", "bootstrap_code", count=426)
+        # 0x01fe End of sector
         self.declare_field("word", "end_of_sector")
 
 
@@ -376,20 +407,29 @@ class NonResidentAttributeData(object):
         if index < 0:
             index = len(self) + index
 
+        clusters = self._clusters
+        csize = clusters.get_cluster_size()
+
         # units: clusters
         for cluster_offset, num_clusters in self._runentries:
             # units: bytes
-            run_length = num_clusters * self._clusters.get_cluster_size()
+            run_length = num_clusters * csize
+            right_border = current_run_start_offset + run_length
 
-            if current_run_start_offset <= index < current_run_start_offset + run_length:
+            # Check if the target byte in the run entry
+            if current_run_start_offset <= index < right_border:
                 # units: bytes
-                i = index - current_run_start_offset
-                cluster = self._clusters[cluster_offset]
-                return cluster[i]
-
+                target_idx = index - current_run_start_offset
+                # The index of the cluster that contains the target byte
+                target_cluster_idx = int(target_idx/csize)
+                # The index of the target byte relative to the cluster
+                byte_relative_idx = (target_idx - target_cluster_idx * csize)
+                cluster = clusters[cluster_offset+target_cluster_idx]
+                return cluster[byte_relative_idx]
+            # else looking at next run entry
             current_run_start_offset += run_length
-        raise IndexError("%d is greater than the non resident attribute data length %s" %
-            (index, len(self)))
+        raise IndexError("%d is greater than the non resident "
+                         "attribute data length %s" % (index, len(self)))
 
     def __getslice__(self, start, end):
         """
@@ -460,17 +500,18 @@ class NonResidentAttributeData(object):
 
 class NTFSFilesystem(object):
     def __init__(self, volume, cluster_size=None):
+        oem_id = volume[3:7]
+        assert oem_id == 'NTFS', 'Wrong OEM signature'
+
         super(NTFSFilesystem, self).__init__()
         self._volume = volume
         self._cluster_size = cluster_size
-        self._vbr = NTFSVBR(self._volume)
-        if cluster_size is not None:
-            self._cluster_size = cluster_size
-        else:
-            self._cluster_size = self._vbr.bytes_per_sector() * \
-                                   self._vbr.sectors_per_cluster()
+        vbr = self._vbr = NTFSVBR(volume)
+        self._cluster_size = cluster_size = (cluster_size or
+                                             vbr.bytes_per_sector() *
+                                             vbr.sectors_per_cluster())
 
-        self._clusters = ClusterAccessor(self._volume, self._cluster_size)
+        self._clusters = ClusterAccessor(volume, cluster_size)
         self._logger = logging.getLogger("NTFSFilesystem")
 
         # balance memory usage with performance
@@ -554,7 +595,7 @@ class NTFSFilesystem(object):
 
         try:
             parent_record = self._enumerator.get_record(parent_record_num)
-        except (BinaryParser.OverrunBufferException, InvalidRecordException):
+        except (OverrunBufferException, InvalidRecordException):
             raise NoParentError("Invalid parent MFT record")
 
         if parent_record.sequence_number() != parent_seq_num:
@@ -617,7 +658,6 @@ def main():
 
         sys32 = root.get_path_entry("windows\\system32")
         g_logger.info("sys32: %s", sys32)
-
 
 
 if __name__ == "__main__":

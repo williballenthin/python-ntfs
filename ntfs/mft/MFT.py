@@ -889,30 +889,52 @@ class MFTRecord(FixupBlock):
     def __init__(self, buf, offset, parent, inode=None):
         super(MFTRecord, self).__init__(buf, offset, parent)
 
+        # 0x0 File or BAAD
         self.declare_field("dword", "magic")
+        # 0x04 Offset to fixup array
         self.declare_field("word",  "usa_offset")
+        # 0x06 Number of entries in fixup array
         self.declare_field("word",  "usa_count")
+        # 0x08 $LogFile sequence number
         self.declare_field("qword", "lsn")
+        # 0x10 Sequence value
         self.declare_field("word",  "sequence_number")
+        # 0x12 Link Count
         self.declare_field("word",  "link_count")
+        # 0x14 Offset of first attribute
         self.declare_field("word",  "attrs_offset")
+        # 0x16 Flags:
+        #   0x00 - not in use
+        #   0x01 - in use
+        #   0x02 - directory
+        #   0x03 - directory in use
         self.declare_field("word",  "flags")
-        self.declare_field("dword", "bytes_in_use")
-        self.declare_field("dword", "bytes_allocated")
-        self.declare_field("qword", "base_mft_record")
-        self.declare_field("word",  "next_attr_instance")
-        self.declare_field("word",  "reserved")
-        self.declare_field("dword", "mft_record_number")
-        self.inode = inode or self.mft_record_number()
 
+        # 0x18 Used size of MFT entry
+        self.declare_field("dword", "bytes_in_use")
+        # 0x1c Allocated size of MFT entry
+        self.declare_field("dword", "bytes_allocated")
+        # 0x20 File reference to base record
+        self.declare_field("qword", "base_mft_record")
+        # 0x28 Nex attribute identifier
+        self.declare_field("word",  "next_attr_instance")
+
+        # Attributes and fixup values
+        # 0x2a
+        self.declare_field("word",  "reserved")
+        # 0x2c
+        self.declare_field("dword", "mft_record_number")
+
+        self.inode = inode or self.mft_record_number()
         self.fixup(self.usa_count(), self.usa_offset())
 
     def attributes(self):
         offset = self.attrs_offset()
+        right_border = self.offset() + self.bytes_in_use()
 
-        while self.unpack_dword(offset) != 0 and \
-              self.unpack_dword(offset) != 0xFFFFFFFF and \
-              offset + self.unpack_dword(offset + 4) <= self.offset() + self.bytes_in_use():
+        while (self.unpack_dword(offset) != 0 and
+               self.unpack_dword(offset) != 0xFFFFFFFF and
+               offset + self.unpack_dword(offset + 4) <= right_border):
             a = Attribute(self._buf, offset, self)
             offset += len(a)
             yield a

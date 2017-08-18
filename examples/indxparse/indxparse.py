@@ -1,6 +1,8 @@
 """
 Clone of INDXParse.py that processes an entire file system.
 """
+import argparse
+from datetime import datetime
 import logging
 
 from ntfs.volume import FlatVolume
@@ -8,7 +10,6 @@ from ntfs.BinaryParser import Mmap
 from ntfs.filesystem import NTFSFilesystem
 from ntfs.mft.MFT import AttributeNotFoundError
 from ntfs.mft.MFT import ATTR_TYPE
-from ntfs.mft.MFT import MREF
 from ntfs.mft.MFT import INDEX_ALLOCATION
 from ntfs.mft.MFT import INDEX_ROOT
 
@@ -26,7 +27,7 @@ def get_directory_index_active_entries(fs, directory):
     INDEX_ROOT and INDEX_ALLOCATION attributes
     """
     if not directory.is_directory():
-        raise InvalidArgumentErro()
+        raise InvalidArgumentError()
 
     # sorry, reaching
     record = directory._record
@@ -141,8 +142,9 @@ def safe_date(f):
 def csv_directory_index_formatter(e):
     entry = e["entry"].filename_information()
     fn = entry.filename()
-    f = u"{status},{path},{filename},{physical_size},{logical_size},{mtime},{atime},{ctime},{crtime}"
-    if e["active"] == True:
+    f = (u"{status},{path},{filename},{physical_size},{logical_size},{mtime},"
+         u"{atime},{ctime},{crtime}")
+    if e["active"]:
         status = "active"
     else:
         status = "slack"
@@ -165,8 +167,6 @@ def bodyfile_directory_index_formatter(e):
 
 
 def main(image_filename, volume_offset, path):
-    logging.basicConfig(level=logging.DEBUG)
-    logging.getLogger("ntfs.mft").setLevel(logging.INFO)
 
     with Mmap(image_filename) as buf:
         v = FlatVolume(buf, volume_offset)
@@ -182,6 +182,18 @@ def main(image_filename, volume_offset, path):
         walk_directories(fs, entry, v)
 
 if __name__ == '__main__':
-    import sys
-    main(sys.argv[1], int(sys.argv[2]), sys.argv[3])
 
+    parser = argparse.ArgumentParser()
+    parser.add_argument('img_file', help='Path to image file')
+    parser.add_argument('volume_offset', help='Offset in bytes '
+                                              'to Boot Sector Section',
+                        type=int)
+    parser.add_argument('path', help='Path')
+    parser.add_argument('-d', '--debug', default=False, action='store_true')
+    args = parser.parse_args()
+
+    if args.debug:
+        logging.basicConfig(level=logging.DEBUG)
+    logging.getLogger("ntfs.mft").setLevel(logging.INFO)
+
+    main(args.img_file, args.volume_offset, args.path)
