@@ -21,7 +21,7 @@ class Volume(Block):
         return self._buf[start + self._offset:end + self._offset]
 
     def __len__(self):
-        return len(self._buf) - offset
+        return len(self._buf) - self._offset
 
 
 class FlatVolume(Volume):
