@@ -282,6 +282,9 @@ class Filesystem(object):
 
 
 class NTFSVBR(Block):
+    """
+    NTFS Volume Boot Record
+    """
     def __init__(self, volume):
         super(NTFSVBR, self).__init__(volume, 0)
         # 0x0
@@ -323,6 +326,11 @@ class NTFSVBR(Block):
         # 0x38 Logical Cluster Number for the File $MFTMirr
         self.declare_field("qword", "mftmirr_lcn")
         # 0x40 Cluster Per MFT Record
+        # The Number of Clusters for each MFT record,
+        # which can be a negative number when the cluster size is larger
+        # than the MFT File record
+        # if the value is negative number,
+        # the MFT record size in bytes equals 2**value
         self.declare_field("byte", "clusters_per_file_record_segment")
         # 0x41 Unused
         self.declare_field("byte", "unused3", count=3)
@@ -351,10 +359,16 @@ class ClusterAccessor(object):
         self._cluster_size = cluster_size
 
     def __getitem__(self, index):
-        return self._volume[index * self._cluster_size:(index + 1) * self._cluster_size]
+        size = self._cluster_size
+        start, end = index * size, (index + 1) * size
+        g_logger.debug('Get clusters %s:%s', start, end)
+        return self._volume[start:end]
 
     def __getslice__(self, start, end):
-        return self._volume[start * self._cluster_size:end * self._cluster_size]
+        size = self._cluster_size
+        start, end = start * size, end * size
+        g_logger.debug('Get clusters %s:%s', start, end)
+        return self._volume[start:end]
 
     def __len__(self):
         return len(self._volume) / self._cluster_size
@@ -396,7 +410,7 @@ class NonResidentAttributeData(object):
     def __init__(self, clusters, runlist):
         self._clusters = clusters
         self._runlist = runlist
-        self._runentries = [(a, b) for a, b in self._runlist.runs()]
+        self._runentries = list(self._runlist.runs())
         self._len = None
 
     def __getitem__(self, index):
@@ -429,70 +443,84 @@ class NonResidentAttributeData(object):
             # else looking at next run entry
             current_run_start_offset += run_length
         raise IndexError("%d is greater than the non resident "
-                         "attribute data length %s" % (index, len(self)))
+                         "attribute data length %s", index, len(self))
 
-    def __getslice__(self, start, end):
+    def __getslice__(self, start, stop):
         """
-        TODO: there are some pretty bad inefficiencies here, i believe
+
+        :param start: start byte
+        :param stop: stop byte
+        :return:
         """
+        # TODO: there are some pretty bad inefficiencies here, i believe
         # TODO: clarify variable names and their units
-        ret = []
-        current_run_start_offset = 0
+        ret = bytearray()
+        virt_byte_offset = 0
         have_found_start = False
 
-        g_logger.debug("NonResidentAttributeData: getslice: start: %s end: %s", hex(start), hex(end))
+        g_logger.debug("NonResidentAttributeData: getslice: "
+                       "start: %x end: %x", start, stop)
+        _len = len(self)
+        if stop == sys.maxint:
+            stop = _len
 
-        if end == sys.maxint:
-            end = len(self)
-
-        if end < 0:
-            end = len(self) + end
+        if stop < 0:
+            stop = _len + stop
 
         if start < 0:
-            start = len(self) + start
+            start = _len + start
 
-        if max(start, end) > len(self):
-             raise IndexError("(%d, %d) is greater than the non resident attribute data length %s" %
-                (start, end, len(self)))
-
+        if max(start, stop) > _len:
+            raise IndexError("(%d, %d) is greater "
+                             "than the non resident attribute data length %s",
+                             start, stop, _len)
+        clusters = self._clusters
+        csize = clusters.get_cluster_size()
         for cluster_offset, num_clusters in self._runentries:
-            g_logger.debug("NonResidentAttributeData: getslice: runentry: start: %s len: %s",
-                    hex(cluster_offset * self._clusters.get_cluster_size()),
-                    hex(num_clusters * self._clusters.get_cluster_size()))
-            run_length = num_clusters * self._clusters.get_cluster_size()
+            g_logger.debug("NonResidentAttributeData: "
+                           "getslice: runentry: start: %x len: %x",
+                           cluster_offset * csize, num_clusters * csize)
+            run_byte_len = num_clusters * csize
+            # check if start byte in the data run
+            virt_byte_stop = virt_byte_offset + run_byte_len
+            is_start_in_run = (virt_byte_offset <= start < virt_byte_stop)
 
             if not have_found_start:
-                if current_run_start_offset <= start < current_run_start_offset + run_length:
-                    if end <= current_run_start_offset + run_length:
-                        # everything is in this run
-                        i = start - current_run_start_offset
-                        j = end - current_run_start_offset
-                        cluster = self._clusters[cluster_offset:cluster_offset + num_clusters]
-                        return cluster[i:j]
-                    else:
-                        # starts in this cluster, continues on to other clusters
-                        i = start - current_run_start_offset
-                        cluster = self._clusters[cluster_offset]
-                        ret.append(cluster[i:])
-            else:  # have found start
-                if current_run_start_offset <= end < current_run_start_offset + run_length:
-                    j = end - current_run_start_offset
-                    cluster = self._clusters[cluster_offset:cluster_offset + num_clusters]
-                    ret.append(cluster[:j])
-                    return "".join(ret)
+                if is_start_in_run:
+                    have_found_start = True
                 else:
-                    cluster = self._clusters[cluster_offset]
-                    ret.append(cluster)
+                    virt_byte_offset += run_byte_len
+                    continue
 
-            current_run_start_offset += run_length
-        return "".join(ret)
+            cluster_stop = cluster_offset + num_clusters
+            _bytes = clusters[cluster_offset:cluster_stop]
+
+            is_stop_in_run = stop <= virt_byte_stop
+            # This is the situation when we have only one data run
+            # everything is in this run
+            if is_start_in_run and is_stop_in_run:
+                return _bytes[start:stop]
+
+            _start = _stop = None
+            if is_start_in_run:
+                _start = start - virt_byte_offset
+            if is_stop_in_run:
+                _stop = stop - virt_byte_offset
+            # if start and stop are not in the data run,
+            # then copy all bytes from the data run's clusters
+            # _bytes[None:None] === _bytes[:]
+            ret.extend(_bytes[_start:_stop])
+            virt_byte_offset += run_byte_len
+
+        return ret
 
     def __len__(self):
         if self._len is not None:
             return self._len
         ret = 0
         for cluster_start, num_clusters in self._runentries:
-            g_logger.debug("NonResidentAttributeData: len: run: cluster: %s len: %s", hex(cluster_start), hex(num_clusters))
+            g_logger.debug("NonResidentAttributeData: len: run: "
+                           "cluster: %x len: %x", cluster_start, num_clusters)
             ret += num_clusters * self._clusters.get_cluster_size()
         self._len = ret
         return ret
@@ -555,11 +583,19 @@ class NTFSFilesystem(object):
         else:
             return NonResidentAttributeData(self._clusters, attribute.runlist())
 
+    def get_mft_record(self):
+        mft_lcn = self._vbr.mft_lcn()
+        g_logger.debug("mft: %x", mft_lcn * 4096)
+        mft_chunk = self._clusters[mft_lcn]
+        mft_record = MFTRecord(mft_chunk, 0, None, inode=INODE_MFT)
+        return mft_record
+
     def get_mft_buffer(self):
-        g_logger.debug("mft: %s", hex(self._vbr.mft_lcn() * 4096))
-        mft_chunk = self._clusters[self._vbr.mft_lcn()]
-        mft_mft_record = MFTRecord(mft_chunk, 0, None, inode=INODE_MFT)
-        mft_data_attribute = mft_mft_record.data_attribute()
+        mft_lcn = self._vbr.mft_lcn()
+        g_logger.debug("mft: %x", mft_lcn * 4096)
+        mft_chunk = self._clusters[mft_lcn]
+        mft_record = MFTRecord(mft_chunk, 0, None, inode=INODE_MFT)
+        mft_data_attribute = mft_record.data_attribute()
         return self.get_attribute_data(mft_data_attribute)
 
     def get_mftmirr_buffer(self):
